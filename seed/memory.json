@@ -1,0 +1,283 @@
+{
+  "version": 1,
+  "settings": {
+    "archive_after_days": 180,
+    "stale_after_days": 365,
+    "delete_policy": "conservative",
+    "use_magic": true,
+    "ai_enabled": true,
+    "ai_model": "sonnet",
+    "ai_threshold": 0.7,
+    "ai_max_budget_usd": 0.1,
+    "ai_timeout_s": 120,
+    "learn_batch": 5,
+    "learn_contradictions": 2,
+    "ignored_after_scans": 3,
+    "max_confirmed_history": 200,
+    "recent_access_veto_days": 7,
+    "ignored_after_days": 3
+  },
+  "categories": {
+    "images/screenshots": {
+      "dir": "Images/Screenshots",
+      "signals": [
+        "screenshot"
+      ],
+      "confidence": 0.9,
+      "note": "Screen captures; usually disposable after a while"
+    },
+    "images/ai-generated": {
+      "dir": "Images/AI-Generated",
+      "signals": [
+        "ai_image"
+      ],
+      "confidence": 0.9
+    },
+    "images/reference": {
+      "dir": "Images",
+      "ext": [
+        "png",
+        "jpg",
+        "jpeg",
+        "gif",
+        "webp",
+        "svg",
+        "bmp",
+        "tiff",
+        "heic"
+      ],
+      "confidence": 0.6,
+      "note": "Broad fallback for images; Claude refines by name"
+    },
+    "documents": {
+      "dir": "Documents",
+      "ext": [
+        "pdf",
+        "doc",
+        "docx",
+        "odt",
+        "rtf",
+        "txt",
+        "md",
+        "xls",
+        "xlsx",
+        "ods",
+        "csv",
+        "ppt",
+        "pptx",
+        "odp",
+        "json",
+        "yaml",
+        "yml",
+        "xml"
+      ],
+      "confidence": 0.55,
+      "note": "Broad fallback; Claude decides the sub-folder (finance, work, notes, ...)"
+    },
+    "documents/finance": {
+      "dir": "Documents/Finance",
+      "confidence": 0.8,
+      "note": "Bank statements, invoices, bills, tax"
+    },
+    "documents/work": {
+      "dir": "Documents/Work",
+      "confidence": 0.8,
+      "note": "Work deliverables, decks, trackers"
+    },
+    "documents/notes": {
+      "dir": "Documents/Notes",
+      "confidence": 0.8,
+      "note": "Markdown notes, prompts, briefs"
+    },
+    "archives": {
+      "dir": "Archives",
+      "ext": [
+        "zip",
+        "tar",
+        "tar.gz",
+        "tgz",
+        "tar.bz2",
+        "tar.xz",
+        "7z",
+        "rar",
+        "gz",
+        "bz2",
+        "xz",
+        "zst"
+      ],
+      "confidence": 0.5,
+      "note": "Broad fallback for compressed files"
+    },
+    "packages": {
+      "dir": "Packages",
+      "ext": [
+        "deb",
+        "rpm",
+        "appimage",
+        "snap",
+        "flatpak",
+        "apk"
+      ],
+      "confidence": 0.9
+    },
+    "installers": {
+      "dir": "Installers",
+      "ext": [
+        "exe",
+        "msi",
+        "dmg",
+        "run",
+        "pkg"
+      ],
+      "confidence": 0.85
+    },
+    "releases": {
+      "dir": "Releases",
+      "signals": [
+        "release",
+        "arch_token"
+      ],
+      "confidence": 0.85,
+      "note": "Firmware / build artifacts; keep newest of a series"
+    },
+    "backups": {
+      "dir": "Backups",
+      "signals": [
+        "backup"
+      ],
+      "confidence": 0.85
+    },
+    "code": {
+      "dir": "Code",
+      "ext": [
+        "py",
+        "js",
+        "ts",
+        "sh",
+        "bash",
+        "c",
+        "cpp",
+        "h",
+        "hpp",
+        "go",
+        "rs",
+        "java",
+        "rb",
+        "php",
+        "sql",
+        "ipynb"
+      ],
+      "confidence": 0.7
+    },
+    "media": {
+      "dir": "Media",
+      "ext": [
+        "mp4",
+        "mkv",
+        "mov",
+        "avi",
+        "webm",
+        "mp3",
+        "wav",
+        "flac",
+        "ogg",
+        "m4a"
+      ],
+      "confidence": 0.8
+    },
+    "fonts": {
+      "dir": "Fonts",
+      "ext": [
+        "ttf",
+        "otf",
+        "woff",
+        "woff2"
+      ],
+      "confidence": 0.9
+    },
+    "disk-images": {
+      "dir": "Disk-Images",
+      "ext": [
+        "iso",
+        "img",
+        "qcow2",
+        "vdi",
+        "ova"
+      ],
+      "confidence": 0.9
+    }
+  },
+  "targets": {},
+  "rules": [
+    {
+      "id": "r-drive-download",
+      "match": {
+        "signals": [
+          "drive_download"
+        ],
+        "ext": [
+          "zip"
+        ]
+      },
+      "category": "archives",
+      "action": "move",
+      "scope": "global",
+      "confidence": 0.8,
+      "hits": 0,
+      "contradictions": 0,
+      "source": "seed",
+      "note": "Google Drive bulk downloads; disposable once extracted. Age policy archives old ones."
+    },
+    {
+      "id": "r-firmware-release",
+      "match": {
+        "glob": "firmware-release-*.zip"
+      },
+      "category": "releases",
+      "action": "move",
+      "scope": "global",
+      "confidence": 0.9,
+      "hits": 0,
+      "contradictions": 0,
+      "source": "seed",
+      "note": "Firmware release builds"
+    },
+    {
+      "id": "r-device-backup",
+      "match": {
+        "glob": "*device-backup*.zip"
+      },
+      "category": "backups",
+      "action": "move",
+      "scope": "global",
+      "confidence": 0.9,
+      "hits": 0,
+      "contradictions": 0,
+      "source": "seed",
+      "note": "Exported device backups"
+    },
+    {
+      "id": "r-generic-image",
+      "match": {
+        "signals": [
+          "generic_name"
+        ],
+        "mime_prefix": "image/"
+      },
+      "category": "images/reference",
+      "action": "move",
+      "scope": "global",
+      "confidence": 0.75,
+      "hits": 0,
+      "contradictions": 0,
+      "source": "seed",
+      "note": "Pasted/untitled images (image.png, image (1).png)"
+    }
+  ],
+  "dir_overrides": {},
+  "learned": {
+    "pending": [],
+    "confirmed": []
+  },
+  "claude_notes": "Seed memory. Categories map to folders relative to the scanned directory. Rules win over the category table; dir-scoped rules win over global ones. Prefer reusing existing categories over inventing new folders. 'move-to' targets must be absolute paths (~ allowed) listed in 'targets'."
+}

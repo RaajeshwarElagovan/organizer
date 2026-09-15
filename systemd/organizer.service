@@ -1,0 +1,26 @@
+[Unit]
+Description=organizer - report-only file classification daemon
+Documentation=file://%h/.local/lib/organizer/README.md
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m organizer.daemon
+Environment=PYTHONPATH=%h/.local/lib/organizer
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=3
+WorkingDirectory=%h
+
+# Safety: the daemon applies a Landlock sandbox to itself at startup (see
+# organizer/sandbox.py): writes are only possible under its own config/data dirs.
+# The systemd options below add a second layer where user units support
+# mount sandboxing (not on Ubuntu with apparmor_restrict_unprivileged_userns=1).
+ProtectSystem=strict
+ReadWritePaths=%h/.config/organizer %h/.local/share/organizer %t %h/.claude %h/.claude.json
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
