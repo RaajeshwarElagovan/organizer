@@ -36,6 +36,15 @@ cp "$SRC/systemd/organizer.service" "$UNIT_DIR/organizer.service"
 if systemctl --user daemon-reload 2>/dev/null; then
   systemctl --user enable --now organizer.service
   systemctl --user restart organizer.service
+  # Lingering keeps the user's systemd instance (and this service) running from
+  # boot, without waiting for a login. Skip with ORGANIZER_NO_LINGER=1.
+  if [ -z "${ORGANIZER_NO_LINGER:-}" ] && [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != "yes" ]; then
+    if loginctl enable-linger "$USER" 2>/dev/null; then
+      echo "enabled lingering: organizer starts at boot even before login"
+    else
+      echo "NOTE: could not enable lingering; run: sudo loginctl enable-linger $USER"
+    fi
+  fi
   sleep 1
   systemctl --user --no-pager --lines=3 status organizer.service || true
 else

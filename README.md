@@ -48,6 +48,11 @@ Two stages per scan:
 cd ~/Downloads && organizer
 ```
 
+The installer enables the `systemd --user` unit (`WantedBy=default.target`)
+and turns on `loginctl enable-linger`, so the daemon starts at boot and
+survives logouts. Check with `systemctl --user status organizer` and
+`loginctl show-user $USER -p Linger`.
+
 Requires python3 (stdlib only) and, for the AI stage, the `claude` CLI logged
 in (Claude Code). Without it the tool still works; ambiguous entries show as
 `review` with the tentative decision.

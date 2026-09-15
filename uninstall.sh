@@ -7,6 +7,7 @@ systemctl --user daemon-reload 2>/dev/null
 rm -rf "$HOME/.local/lib/organizer"
 rm -f "$HOME/.local/bin/organizer"
 rm -f "${XDG_RUNTIME_DIR:-/tmp}/organizer.sock"
+echo "lingering left as is (disable with: loginctl disable-linger $USER)"
 if [ "${1:-}" = "--purge" ]; then
   rm -rf "$HOME/.config/organizer" "$HOME/.local/share/organizer"
   echo "removed organizer including memory, state and reports"
