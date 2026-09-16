@@ -229,34 +229,6 @@
       "note": "Google Drive bulk downloads; disposable once extracted. Age policy archives old ones."
     },
     {
-      "id": "r-firmware-release",
-      "match": {
-        "glob": "firmware-release-*.zip"
-      },
-      "category": "releases",
-      "action": "move",
-      "scope": "global",
-      "confidence": 0.9,
-      "hits": 0,
-      "contradictions": 0,
-      "source": "seed",
-      "note": "Firmware release builds"
-    },
-    {
-      "id": "r-device-backup",
-      "match": {
-        "glob": "*device-backup*.zip"
-      },
-      "category": "backups",
-      "action": "move",
-      "scope": "global",
-      "confidence": 0.9,
-      "hits": 0,
-      "contradictions": 0,
-      "source": "seed",
-      "note": "Exported device backups"
-    },
-    {
       "id": "r-generic-image",
       "match": {
         "signals": [

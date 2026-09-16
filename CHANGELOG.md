@@ -19,8 +19,9 @@ Initial release.
 - **Kernel-enforced write restriction** via Landlock (`organizer/sandbox.py`,
   ctypes, no dependencies): after startup the daemon and the in-process CLI
   can read anywhere but write only under `~/.config/organizer`,
-  `~/.local/share/organizer`, the socket dir and `/tmp`. Falls back with a
-  visible warning on kernels without Landlock.
+  `~/.local/share/organizer` and the dedicated socket dir (see *Security*
+  below for the exact allow-list). Falls back with a visible warning on
+  kernels without Landlock.
 - **Stage 1 rule engine** (`classifier.py`): memory rules with dir-scoped
   precedence, identical/revision duplicate detection, version-series
   detection (older builds → archive or delete), already-extracted archive
@@ -54,7 +55,7 @@ Initial release.
   schema and editing advice in `MEMORY-GUIDE.md` (also copied next to the
   memory file on install).
 - **Daemon** (`daemon.py`): `systemd --user` service on a `0600` Unix
-  socket (`$XDG_RUNTIME_DIR/organizer.sock`), JSON-lines protocol,
+  socket (`$XDG_RUNTIME_DIR/organizer/organizer.sock`, see *Changed*), JSON-lines protocol,
   commands `scan`, `explain`, `history`, `status`, `learn`, `reload`.
   The CLI falls back to in-process mode when the daemon is unreachable
   (`--no-daemon` forces it).
@@ -96,6 +97,14 @@ Initial release.
   `$HOME` without Claude; new tests for the glob-only policy on Claude rules.
 
 ### Changed
+- Seed memory no longer ships the maintainer's own `firmware-release-*.zip`
+  and `*device-backup*.zip` rules; only the generic `drive-download` and
+  `generic-image` rules remain (existing `memory.json` files are not
+  touched by an upgrade).
+- README states what is sent to Anthropic and billed per scan, the
+  Landlock kernel requirement and fail-open behaviour, the name+size
+  duplicate heuristic, the age-policy defaults, and how the daemon finds
+  `claude`; the suggested apply prompt now asks before every delete.
 - **Socket path moved** from `$XDG_RUNTIME_DIR/organizer.sock` to
   `$XDG_RUNTIME_DIR/organizer/organizer.sock` (and `/tmp/organizer-<uid>.sock`
   to `/tmp/organizer-<uid>/organizer.sock`). `./install.sh` restarts the

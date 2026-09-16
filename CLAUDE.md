@@ -44,7 +44,7 @@ CI (`.github/workflows/ci.yml`) runs the suite + `.github/scripts/smoke.sh` on P
 
 ## Hard rules (non-negotiable — see CONTRIBUTING.md)
 
-1. **Report only.** No code may create/rename/move/delete files outside `paths.CONFIG_DIR`, `paths.DATA_DIR`, the socket dir and `/tmp`. Do not add an "apply" mode.
+1. **Report only.** No code may create/rename/move/delete files outside `paths.CONFIG_DIR`, `paths.DATA_DIR` and the dedicated socket dir (`paths.socket_dir()`) — not `/tmp`, not `/dev`; the Landlock allow-list is exactly those three. Do not add an "apply" mode.
 2. **Names, not contents.** `scanner.py`/`engine.py` must not `open()` user files. Sole exception: `file -b --mime-type` on extensionless entries, gated by `settings.use_magic`.
 3. **stdlib only**, Python 3.8-compatible syntax (`/usr/bin/python3`).
 4. **One Claude call per scan**, schema-constrained (`--json-schema`), budget-capped, no tools. No per-file calls, no extra turns.

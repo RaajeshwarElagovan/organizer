@@ -5,13 +5,41 @@ classifies what is there — **from names, types and metadata only, never file
 contents** — and proposes a folder structure plus a per-file action: create a
 folder and move into it, move elsewhere, archive, delete, keep, or review.
 
-It **never modifies your files**. At startup the daemon (and the in-process
-CLI) puts itself in a [Landlock](https://docs.kernel.org/userspace-api/landlock.html)
-sandbox: it can read everything but can only create, change or delete files
-under `~/.config/organizer`, `~/.local/share/organizer` and its own socket
-dir `$XDG_RUNTIME_DIR/organizer/`. That promise is enforced by the kernel, not just by the code
-(`organizer status` shows the active sandbox). Hand the JSON report to a Claude
-agent (or read it yourself) when you want the plan applied.
+It **never modifies your files** — there is no code path that moves, renames
+or deletes anything outside its own directories. On top of that, at startup
+the daemon (and the in-process CLI) puts itself in a
+[Landlock](https://docs.kernel.org/userspace-api/landlock.html) sandbox: it can
+read everything but can only create, change or delete files under
+`~/.config/organizer`, `~/.local/share/organizer` and its own socket dir
+`$XDG_RUNTIME_DIR/organizer/`. On a Linux kernel ≥ 5.13 with Landlock enabled
+(x86_64 or aarch64 — most distributions released since 2022) that promise is
+enforced by the kernel, not just by the code; `organizer status` shows whether
+the sandbox is active. On older kernels organizer still runs, prints
+`no kernel sandbox` on stderr, and relies on the code alone. Hand the JSON
+report to a Claude agent (or read it yourself) when you want the plan applied.
+
+"Never file contents" has one exception: for files *without an extension* it
+runs `file --mime-type`, which reads a few magic bytes (`settings.use_magic:
+false` turns it off). The full security model, including what is *not*
+covered, is in [SECURITY.md](SECURITY.md).
+
+## What leaves your machine, and what it costs
+
+The AI stage is **on by default** and uses your Claude Code login. For every
+scan with entries the rules could not decide, one `claude -p` call sends:
+
+- the absolute path of the scanned directory and the names of its sub-folders;
+- for each undecided entry: name, extension, size, age, MIME guess and derived
+  signals — never contents; already-decided entries as `name -> action`;
+- your whole `memory.json` (rules, categories, `targets`, notes, recent
+  outcomes).
+
+File names alone can be sensitive. Each call is billed to your Claude Code
+account (typically a few cents; capped by `ai_max_budget_usd`, default $0.10,
+per call). Decisions are cached per entry for 7 days, so re-scanning an
+unchanged directory is free. To keep everything local: `organizer --no-ai`
+for one run, or `"ai_enabled": false` in `memory.json` — the rule engine
+still works and undecided entries show as `review`.
 
 ## Brain
 
@@ -19,11 +47,17 @@ Two stages per scan:
 
 1. **Rule engine** (offline, instant): memory rules, duplicate / version-series /
    already-extracted detection, extension & MIME category table, age policy.
+   All of it works on names and `stat()` only: a "duplicate" is `X (1).ext`
+   next to an `X.ext` **of the same size** (contents are never compared); the
+   age policy proposes `archive` for anything older than `archive_after_days`
+   (default 180) and `delete` for disposable files older than
+   `stale_after_days` (365) — tune both in `memory.json` before pointing it at
+   a working folder rather than a downloads folder.
 2. **Claude** (one `claude -p` call, no tools, no file access): every entry the
    rules could not place with confidence ≥ 0.7 is sent as a batch of facts
    together with the memory and the already-decided structure. Claude returns
-   structured JSON decisions plus new rules, which are merged into memory.
-   Results are cached, so re-running on an unchanged directory is free.
+   structured JSON decisions plus new rules, which are merged into memory
+   after validation (see `SECURITY.md`, *Prompt-injection surface*).
 
 ## Memory that learns without being asked
 
@@ -44,9 +78,15 @@ Two stages per scan:
 ## Install
 
 ```sh
+git clone https://github.com/RaajeshwarElagovan/organizer.git && cd organizer
 ./install.sh            # -> ~/.local/lib/organizer, ~/.local/bin/organizer, systemd --user unit
 cd ~/Downloads && organizer
 ```
+
+Requirements: Linux, `/usr/bin/python3` ≥ 3.8 (stdlib only, nothing to
+`pip install`; tested on 3.8–3.14), optionally `systemd --user` for the
+daemon, optionally `file` for magic-byte MIME detection, and the `claude`
+CLI logged in for the AI stage.
 
 The installer writes only under `$HOME`: `~/.local/lib/organizer` (code),
 `~/.local/bin/organizer` (launcher), `~/.config/systemd/user/organizer.service`,
@@ -61,9 +101,14 @@ daemon up at boot before any login, opt in with `ORGANIZER_LINGER=1
 and unit and keeps your memory and reports; `./uninstall.sh --purge` removes
 those too.
 
-Requires python3 (stdlib only) and, for the AI stage, the `claude` CLI logged
-in (Claude Code). Without it the tool still works; ambiguous entries show as
-`review` with the tentative decision.
+Without the `claude` CLI the tool still works; ambiguous entries show as
+`review` with the tentative decision. Note that the **daemon** looks for
+`claude` on its own `PATH` (`~/.local/bin`, `/usr/local/bin`, `/usr/bin`,
+`/bin`): a `claude` installed via npm/nvm under `~/.nvm` or `~/.npm-global`
+works with `organizer --no-daemon` but not through the service —
+`organizer status` then shows `claude=NOT FOUND`. Either install the native
+`claude` into `~/.local/bin`, or `systemctl --user edit organizer` and add
+`[Service]` / `Environment=PATH=/path/to/bin:…`.
 
 ## Commands
 
@@ -76,7 +121,10 @@ organizer learn [--dry-run]   consolidate observed outcomes into memory now
 organizer memory [show|validate|path]
 organizer reload              force memory reload
 organizer --no-daemon ...     run in-process (also the automatic fallback)
+organizer --version | --help
 ```
+
+`--json` and `--no-daemon` may come before or after the subcommand.
 
 Reports: `~/.local/share/organizer/reports/<dir>/<timestamp>.json` (+ `latest.json`).
 Logs: `journalctl --user -u organizer -f`.
@@ -85,11 +133,32 @@ Logs: `journalctl --user -u organizer -f`.
 
 ```
 claude "Read ~/.local/share/organizer/reports/home_me_Downloads/latest.json and apply the
-proposals in ~/Downloads: create the folders, move the files, and delete only what is
-marked delete. Ask me before deleting anything over 50 MB."
+proposals in ~/Downloads: create the folders and move the files. List everything marked
+delete and ask me before deleting any of it."
 ```
 
-The next `organizer` run notices what moved and learns from it.
+Treat `delete` proposals as suggestions: "identical duplicate" means same
+name pattern and size, not verified identical contents, and nothing stops
+the rules and Claude from marking every copy of a file for deletion. The
+next `organizer` run notices what moved and learns from it.
+
+## Limitations
+
+- Scans one directory, non-recursively; sub-folders are entries, not descended.
+- Everything is inferred from names and metadata, so it can be wrong; every
+  proposal carries its confidence and reasons, and `organizer explain <file>`
+  shows the chain.
+- The kernel sandbox needs Landlock (Linux ≥ 5.13, x86_64/aarch64); elsewhere
+  it runs without it and says so.
+- The `claude` process itself is not sandboxed (it needs `~/.claude`); it is
+  run with no tools, so the model cannot touch files — see `SECURITY.md`.
+- Linux only.
+
+## Security and licence
+
+Security model and residual risks: [SECURITY.md](SECURITY.md) and
+[THREAT-MODEL.md](THREAT-MODEL.md); please report vulnerabilities as
+described there rather than in a public issue. Licence: MIT ([LICENSE](LICENSE)).
 
 ## Layout
 

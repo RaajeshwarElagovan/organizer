@@ -50,12 +50,14 @@ first.
 | `seed/memory.json` | Initial memory installed on first run |
 | `tests/test_claude_boundary.py` | Unit + integration tests for the model-output boundary (`python3 -m unittest discover -s tests`) |
 | `tests/test_sandbox.py`, `tests/sandbox_probe.py` | Adversarial tests of the Landlock write boundary in daemon and in-process mode |
+| `tests/test_learning.py` | Learning layers 1 and 2 against the real pipeline with Claude mocked |
+| `tests/test_lifecycle.py` | `install.sh` / `uninstall.sh` / daemon / CLI lifecycle in a throw-away `$HOME` with `systemctl` shims |
 | `systemd/organizer.service` | User unit; `RuntimeDirectory=organizer` (0700) for the socket; `ProtectSystem=strict` + `ReadWritePaths` as a second sandbox layer where supported |
 | `install.sh` / `uninstall.sh` | Copy to `~/.local/lib/organizer`, launcher in `~/.local/bin` (`PYTHONSAFEPATH=1`), enable + restart unit; lingering only with `ORGANIZER_LINGER=1`. Uninstall keeps config/data unless `--purge` |
 
 ## Request lifecycle for `organizer` (scan)
 
-1. **CLI** resolves `cwd`, sends `{"cmd":"scan","cwd":…,"opts":{all,no_ai,fresh}}`.
+1. **CLI** resolves `cwd`, sends `{"cmd":"scan","cwd":…,"opts":{no_ai,fresh}}` (`--all` only affects rendering).
 2. **Daemon** takes the global `RLock` and calls `engine.run_scan`.
 3. `MemoryStore.get()` checks `memory.json`'s mtime and hot-reloads it if it
    changed; an invalid file is reported as a warning and the last good copy is
@@ -132,8 +134,9 @@ Two independent layers, both driven by evidence rather than by asking the user.
 | `~/.local/share/organizer/reports/<slug>/` | daemon | timestamped reports + `latest.json` |
 | `$XDG_RUNTIME_DIR/organizer/organizer.sock` (fallback `/tmp/organizer-<uid>/`) | daemon | Unix socket `0600` in a dedicated `0700` dir — the only Landlock-writable root besides config/data |
 
-All writes are *tmp + `os.replace`* so a crash never leaves a half-written
-file. `memory.json` is the only file meant for external editing; the daemon
+`memory.json`, `state.json` and `latest.json` are written *tmp + `os.replace`*
+so a crash never leaves a half-written copy of a file that is read back;
+timestamped report files are written directly. `memory.json` is the only file meant for external editing; the daemon
 validates it on reload and keeps serving the last good copy if it is broken.
 
 ## Claude integration
@@ -148,9 +151,11 @@ claude -p --tools "" --setting-sources "" --strict-mcp-config --no-session-persi
 
 No API key is handled by organizer; it relies on the user's Claude Code
 login. `CLAUDE*` environment variables are stripped so project settings,
-hooks and MCP servers cannot leak in. The model only ever receives compact
-facts (`name | ext | size | age | mime | signals | tentative`) plus the
-memory — never file contents or paths outside the scanned directory name.
+hooks and MCP servers cannot leak in. The model receives the **absolute path of the scanned directory**, the
+names of its existing sub-folders, compact facts per undecided entry
+(`name | ext | size | age | mime | signals | tentative`), the already-decided
+`name -> action` pairs, and the memory (categories, `targets`, rules,
+`claude_notes`, recent outcomes) — never file contents.
 
 ## Design constraints worth keeping
 

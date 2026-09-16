@@ -29,8 +29,12 @@ report a problem. The attacker's view is in `THREAT-MODEL.md`.
 3. **Claude gets no tools and no file access.** The CLI is invoked with
    `--tools "" --setting-sources "" --strict-mcp-config --max-turns 1`, a
    JSON schema, a spend cap (`ai_max_budget_usd`, default $0.10) and a
-   timeout (`ai_timeout_s`, default 120 s). Only names, extensions, sizes,
-   ages, MIME guesses, derived signals and the memory file are sent.
+   timeout (`ai_timeout_s`, default 120 s). What is sent: the absolute path
+   of the scanned directory, the names of its sub-folders, and for each entry
+   its name, extension, size, age, MIME guess, derived signals and tentative
+   decision, plus the memory file (rules, categories, `targets`, notes, recent
+   outcomes). Never file contents. This is on by default; `--no-ai` for one
+   run or `settings.ai_enabled: false` keeps everything local.
 4. **Memory edits are validated.** `memory.json` is schema-checked on every
    load and before every save; an invalid file is never loaded (the last good
    copy stays in use) and a `.bak` is written before each daemon-side save.
@@ -163,10 +167,13 @@ currently record whether the sandbox was active.
   CLI (which must write its own state under `~/.claude`). That subprocess is
   launched with no tools, but it is not Landlock-confined. A compromised
   `claude` binary on `PATH` is therefore outside the sandbox.
-- **Data leaves the machine.** File and folder *names*, sizes, ages, MIME
-  guesses and the contents of `memory.json` (including `claude_notes` and
-  recent outcomes) are sent to Anthropic via the Claude Code CLI. File names
-  can themselves be sensitive. Use `--no-ai` or `ai_enabled: false` for
+- **Data leaves the machine.** The scanned directory's absolute path, file
+  and folder *names*, sizes, ages, MIME guesses and the contents of
+  `memory.json` (including `claude_notes`, `targets` and recent outcomes) are
+  sent to Anthropic via the Claude Code CLI, and each call is billed to your
+  Claude Code login (or to `ANTHROPIC_API_KEY` if you export it — organizer
+  passes non-`CLAUDE*` variables through). File names can themselves be
+  sensitive. Use `--no-ai` or `ai_enabled: false` for
   directories where that is not acceptable; the rule engine still works.
 - **Reports and memory are plaintext** under `~/.local/share/organizer` and
   `~/.config/organizer`, readable by the user (and root). They contain file
@@ -183,7 +190,20 @@ currently record whether the sandbox was active.
   cannot create a mount namespace. `NoNewPrivileges=yes` and
   `RuntimeDirectory=organizer` (0700, removed when the unit stops) do
   apply. Landlock is the only enforced write restriction. Do not count on
-  the unit's mount sandboxing.
+  the unit's mount sandboxing. Conversely, on distributions where user units
+  *can* get a mount namespace (no AppArmor userns restriction) the directives
+  become effective and the `claude` CLI then runs with a read-only filesystem
+  except `ReadWritePaths` (`~/.claude`, `~/.claude.json`); that configuration
+  has not been tested — if the AI stage works with `--no-daemon` but not via
+  the service there, check `journalctl --user -u organizer` and add the paths
+  the CLI needs with `systemctl --user edit organizer`.
+- **The daemon finds `claude` on its own `PATH`.** The unit sets
+  `PATH=~/.local/bin:/usr/local/bin:/usr/bin:/bin` (plus the `~/.local/bin/claude`
+  fallback in `brain.claude_path`). A `claude` installed via npm/nvm under
+  `~/.nvm` or `~/.npm-global` is found by `organizer --no-daemon` but not by
+  the service; `organizer status` shows `claude=NOT FOUND` in that case. Fix
+  with `systemctl --user edit organizer` → `[Service]` /
+  `Environment=PATH=…`, or install the native `claude` into `~/.local/bin`.
 - **The default socket dir is guarded against squatting.** Because it is a
   Landlock-writable root, `paths.ensure_dirs()` refuses to use
   `$XDG_RUNTIME_DIR/organizer` or `/tmp/organizer-<uid>` unless it is a real
@@ -192,9 +212,11 @@ currently record whether the sandbox was active.
   pre-creates it via `RuntimeDirectory=organizer` / `RuntimeDirectoryMode=0700`.
   An explicit `ORGANIZER_SOCKET` override is trusted as the user's choice.
 - **The tool proposes deletions.** It never executes them, but a downstream
-  agent asked to "apply the report" will. Review `delete` entries — the
-  README's suggested prompt asks Claude to confirm before deleting anything
-  over 50 MB, and `delete_policy: conservative` (default) prefers archiving.
+  agent asked to "apply the report" will. Review `delete` entries — an "identical
+  duplicate" is `X (1).ext` beside an `X.ext` of the same size (contents are
+  never compared), and nothing prevents every copy of a file being proposed
+  for deletion. The README's suggested prompt asks Claude to confirm before
+  every delete, and `delete_policy: conservative` (default) prefers archiving.
 
 ## Prompt-injection surface
 
