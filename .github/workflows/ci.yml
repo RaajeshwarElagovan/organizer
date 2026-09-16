@@ -1,0 +1,171 @@
+# CI for organizer: stdlib-only, no Claude login, nothing installed into the
+# runner's real $HOME and no systemd --user service touched.
+#
+# Every test/smoke step runs with HOME, XDG_* and XDG_RUNTIME_DIR pointing at a
+# throw-away directory under $RUNNER_TEMP. The lifecycle tests already fake
+# their own $HOME and shim systemctl/loginctl/rm; the sandbox tests keep their
+# scratch under $HOME/.cache (not /tmp) so the /tmp-denial probes stay
+# meaningful. The AF_UNIX path limit (108 bytes) is the reason HOME must be
+# short: the deepest socket path in the suite is about 70 bytes below HOME.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  # Unclosed files/sockets/processes anywhere in the suite fail the run
+  # (see the "ResourceWarning" step below for how they are detected).
+  PYTHONWARNINGS: "error::ResourceWarning"
+
+jobs:
+  test:
+    name: py${{ matrix.python }} (${{ matrix.role }})
+    # Pinned image on purpose: ubuntu-latest may move to a release for which
+    # setup-python has no 3.8/3.9 builds (there are none for ubuntu-26.04).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.8"     # documented minimum (install.sh gate, CONTRIBUTING.md)
+            role: minimum
+          - python: "3.12"    # /usr/bin/python3 of Ubuntu 24.04 — what the installed launcher and unit run
+            role: system
+          - python: "3.14"    # newest stable CPython
+            role: newest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Isolated HOME / XDG layout
+        id: home
+        run: |
+          H="$RUNNER_TEMP/h"           # short: AF_UNIX socket paths are capped at 108 bytes
+          mkdir -p "$H/.config" "$H/.local/share" "$H/.cache" "$H/run"
+          chmod 700 "$H/run"
+          test "${#H}" -lt 48 || { echo "HOME path too long for AF_UNIX sockets: $H" >&2; exit 1; }
+          echo "home=$H" >> "$GITHUB_OUTPUT"
+          {
+            echo "HOME=$H"
+            echo "XDG_CONFIG_HOME=$H/.config"
+            echo "XDG_DATA_HOME=$H/.local/share"
+            echo "XDG_CACHE_HOME=$H/.cache"
+            echo "XDG_RUNTIME_DIR=$H/run"
+            echo "LANG=C.UTF-8"
+          } >> "$GITHUB_ENV"
+          # No Claude in CI: strip any CLAUDE* variable and make sure the CLI is absent.
+          for v in $(env | grep -o '^CLAUDE[A-Z_]*' || true); do echo "$v=" >> "$GITHUB_ENV"; done
+          if command -v claude >/dev/null; then echo "::error::'claude' must not be on PATH in CI"; exit 1; fi
+
+      - name: Toolchain and kernel facts
+        run: |
+          python -VV
+          /usr/bin/python3 -V                     # what install.sh / the launcher / the unit use
+          uname -r
+          PYTHONPATH=. python -c '
+          import os
+          from organizer import sandbox
+          try:
+              abi = sandbox.abi_version()
+              print("landlock ABI", abi)
+          except OSError as e:
+              abi = "none (%s)" % e
+              print("::warning::Landlock unavailable on this runner (%s): tests/test_sandbox.py will skip its enforcement classes" % e)
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write("LANDLOCK_ABI=%s\n" % abi)
+          '
+          test -z "$(systemctl --user list-units organizer.service --no-legend 2>/dev/null)" || \
+            { echo "::error::a real organizer.service exists on the runner"; exit 1; }
+
+      - name: Compile
+        run: |
+          python -m py_compile organizer/*.py tests/*.py
+          python -m compileall -q organizer tests
+          python -c 'import json
+          with open("seed/memory.json") as f:
+              json.load(f)'
+          bash -n install.sh uninstall.sh .github/scripts/smoke.sh
+
+      - name: Unit tests
+        run: |
+          # -X dev turns on the extra runtime checks; -W error::ResourceWarning
+          # (also in PYTHONWARNINGS, so child processes get it) makes an
+          # unclosed resource print "ResourceWarning" — it is raised from
+          # __del__, so it cannot fail a test by itself; the next step greps.
+          PYTHONPATH=. python -X dev -W error::ResourceWarning \
+            -m unittest discover -s tests -v 2>&1 | tee "$RUNNER_TEMP/unittest.log"
+
+      - name: Landlock coverage
+        # A green run must say whether the kernel-enforcement tests actually ran:
+        # tests/test_sandbox.py skips its enforcement classes on a kernel without
+        # Landlock, and a skip must not pass for coverage.
+        run: |
+          log="$RUNNER_TEMP/unittest.log"
+          # unittest -v prints "test_x (test_sandbox.Class) ... ok"; with a docstring the
+          # verdict lands on the following line, so count per test, not per line.
+          read -r ran skipped < <(awk '
+            /^test_[A-Za-z0-9_]+ \((tests\.)?test_sandbox\./ { t = 1 }
+            t && /\.\.\. ok$/      { ran++; t = 0 }
+            t && /\.\.\. skipped/  { skipped++; t = 0 }
+            t && /\.\.\. (FAIL|ERROR)/ { t = 0 }
+            END { print ran + 0, skipped + 0 }' "$log")
+          echo "test_sandbox: $ran ran, $skipped skipped (Landlock ABI: $LANDLOCK_ABI)"
+          if [ "$skipped" -gt 0 ] && [ "$(grep -c 'without Landlock' "$log" || true)" -gt 0 ]; then
+            echo "::warning title=Landlock tests skipped::$skipped test_sandbox tests skipped — runner kernel has no Landlock; the sandbox was NOT verified in this job"
+            echo "### Landlock sandbox tests: :warning: SKIPPED ($skipped skipped, $ran ran) — runner kernel has no Landlock ($LANDLOCK_ABI)" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$ran" -gt 0 ]; then
+            echo "::notice title=Landlock tests ran::$ran test_sandbox tests executed against Landlock ABI $LANDLOCK_ABI ($skipped skipped)"
+            echo "### Landlock sandbox tests: :white_check_mark: ran ($ran ran, $skipped skipped, Landlock ABI $LANDLOCK_ABI)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::no test_sandbox results found in $log"; exit 1
+          fi
+
+      - name: CLI / in-process / dev-daemon smoke
+        env:
+          PYTHON: python
+        run: bash .github/scripts/smoke.sh 2>&1 | tee "$RUNNER_TEMP/smoke.log"
+
+      - name: No ResourceWarnings
+        run: |
+          if grep -n "ResourceWarning" "$RUNNER_TEMP/unittest.log" "$RUNNER_TEMP/smoke.log"; then
+            echo "::error::unexpected ResourceWarning(s) in the test or smoke run (see above)"; exit 1
+          fi
+          grep -E "^Ran [0-9]+ tests" "$RUNNER_TEMP/unittest.log"
+          grep -E "^OK" "$RUNNER_TEMP/unittest.log"
+
+      - name: Real HOME and user manager untouched
+        run: |
+          # Nothing may have been written to the runner's real home or user units.
+          real="$(getent passwd "$(id -u)" | cut -d: -f6)"
+          for p in "$real/.config/organizer" "$real/.local/lib/organizer" "$real/.local/bin/organizer" \
+                   "$real/.config/systemd/user/organizer.service" "$real/.local/share/organizer"; do
+            [ ! -e "$p" ] || { echo "::error::$p exists — a test escaped the isolated HOME"; exit 1; }
+          done
+          test -z "$(systemctl --user list-unit-files organizer.service --no-legend 2>/dev/null)"
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-py${{ matrix.python }}
+          path: |
+            ${{ runner.temp }}/unittest.log
+            ${{ runner.temp }}/smoke.log
+            ${{ steps.home.outputs.home }}/organizer-smoke.*/out/
+          if-no-files-found: ignore
