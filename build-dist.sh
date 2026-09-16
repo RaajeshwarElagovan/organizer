@@ -35,10 +35,9 @@ tar -C "$BUILD" -xzf "$TARBALL"
 ( cd "$BUILD/organizer-$VERSION" && PATH=/usr/local/bin:/usr/bin:/bin dpkg-buildpackage -us -uc -b >"$BUILD/build.log" 2>&1 ) \
   || { cat "$BUILD/build.log" >&2; exit 1; }
 cp "$BUILD/$DEB" "$DIST/$DEB"
-cp "$BUILD/organizer_${DEBVER}_amd64.buildinfo" "$DIST/" 2>/dev/null || true
 if command -v lintian >/dev/null; then
   echo "== lintian"
-  ( cd "$BUILD" && lintian --no-tag-display-limit "$DEB" ) || true
+  ( cd "$BUILD" && lintian --tag-display-limit 0 "$DEB" ) || true
 fi
 echo
 ls -l "$DIST"
