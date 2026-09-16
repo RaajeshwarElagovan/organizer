@@ -200,7 +200,7 @@ jobs:
       - name: Tarball is the git tree
         run: |
           v="$(python3 -c 'import organizer; print(organizer.__version__)')"
-          tar -tzf "dist/organizer-$v.tar.gz" | sed "s|^organizer-$v/||" | grep -v '/$' | LC_ALL=C sort > /tmp/tar.lst
+          tar -tzf "dist/organizer-$v.tar.gz" | grep -v '/$' | sed "s|^organizer-$v/||" | LC_ALL=C sort > /tmp/tar.lst
           git ls-files | LC_ALL=C sort > /tmp/git.lst
           diff /tmp/git.lst /tmp/tar.lst
           ! tar -tzf "dist/organizer-$v.tar.gz" | grep -E '\.git/|__pycache__|\.pyc$|^organizer-[^/]*/dist/'
