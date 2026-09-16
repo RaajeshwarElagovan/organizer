@@ -1,0 +1,4 @@
+organizer                    usr/lib/python3/dist-packages
+debian/bin/organizer         usr/bin
+seed/memory.json             usr/share/organizer/seed
+debian/systemd-user/organizer.service usr/lib/systemd/user

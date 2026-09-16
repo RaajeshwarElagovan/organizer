@@ -1,0 +1,19 @@
+#!/usr/bin/make -f
+# Pure-Python, stdlib-only, no build system: files are placed by debian/install
+# and dh_python3 adds the byte-compile (postinst) / clean (prerm) snippets. The
+# user unit goes in via debian/install on purpose: dh_installsystemduser would
+# add enable/mask snippets, and enabling the daemon is the user's decision.
+export PYBUILD_DISABLE=1
+
+%:
+	dh $@ --with python3
+
+override_dh_installsystemduser:
+	# intentionally empty: no maintainer-script snippets for the user unit
+
+override_dh_installchangelogs:
+	dh_installchangelogs CHANGELOG.md
+
+override_dh_compress:
+	# keep the Markdown docs readable in place (the unit's Documentation= points at README.md)
+	dh_compress -X.md

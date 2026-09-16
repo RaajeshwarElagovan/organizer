@@ -1,2 +1,11 @@
 __pycache__/
 *.pyc
+# release build output (build-dist.sh, dpkg-buildpackage)
+dist/
+debian/organizer/
+debian/.debhelper/
+debian/files
+debian/*.substvars
+debian/*.debhelper
+debian/*.debhelper.log
+debian/debhelper-build-stamp

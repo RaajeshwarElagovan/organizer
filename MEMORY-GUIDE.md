@@ -2,6 +2,8 @@
 
 File: `~/.config/organizer/memory.json`. The daemon hot-reloads it (mtime/size/inode check before every request), keeps `memory.json.bak` on every write it makes itself, and refuses to load an invalid file: it keeps the last good copy in memory (an empty default memory if it was invalid at startup), reports the error in `organizer status` and in every scan's `warnings`, and **never writes over the invalid file** — outcomes learned meanwhile stay in memory only and are dropped when the repaired file is reloaded. Fix the file (or `cp memory.json.bak memory.json`), then `organizer reload`. Validate after editing: `organizer memory validate`.
 
+First run: when the file does not exist it is copied from the seed — `seed/memory.json` next to the installed package (checkout, `~/.local/lib/organizer`) or, for the Debian package, `/usr/share/organizer/seed/memory.json` (found via `$XDG_DATA_DIRS`; `ORGANIZER_SEED=<file>` overrides). An existing `memory.json` is never replaced by the seed, valid or not.
+
 This file is meant to be rewritten by a Claude agent (or by hand). Everything except `settings` is fair game.
 
 ## Schema

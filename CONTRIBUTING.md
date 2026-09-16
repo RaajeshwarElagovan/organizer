@@ -126,7 +126,13 @@ data, failed install, uninstall/`--purge`/partial, socket permissions and
 stale/live socket handling, runtime-dir variants, CLI fallback,
 `--no-daemon`, and `claude` missing/failing/timing out. Any change to
 `install.sh`, `uninstall.sh`, `daemon.main`, `paths` or the CLI parser
-needs to keep it green. Then the manual smoke run before opening a PR:
+needs to keep it green. `tests/test_packaging.py` checks `debian/`
+(metadata, launcher, `debian/systemd-user/organizer.service` identical to
+`systemd/organizer.service` apart from the dropped `PYTHONPATH` and the
+`Documentation=` line — change both units together), seed resolution for a
+package installed without a sibling `seed/`, and, when `dpkg-buildpackage`
++ debhelper are installed, builds the `.deb` in `~/.cache/organizer-tests`
+and inspects it. Then the manual smoke run before opening a PR:
 
 ```sh
 python3 -m py_compile organizer/*.py
@@ -191,8 +197,16 @@ PYTHON=python3 bash .github/scripts/smoke.sh
 1. Bump `__version__` in `organizer/__init__.py`.
 2. Move the **Unreleased** section of `CHANGELOG.md` under the new version
    with today's date.
-3. Commit as `release: vX.Y.Z`, tag `vX.Y.Z`.
-4. `./install.sh` on a clean machine; run the fixture above.
+3. Add a matching `X.Y.Z-1` entry at the top of `debian/changelog`
+   (`dch -v X.Y.Z-1` or by hand; `build-dist.sh` refuses a mismatch).
+4. Commit as `release: vX.Y.Z`, tag `vX.Y.Z`.
+5. `./build-dist.sh` (needs `dpkg-dev debhelper dh-python fakeroot`, `lintian`
+   optional) → `dist/organizer-X.Y.Z.tar.gz` (`git archive` of the tag,
+   reproducible) and `dist/organizer_X.Y.Z-1_all.deb`. `dist/` is ignored by
+   git; never commit the artifacts.
+6. `./install.sh` on a clean machine and `sudo dpkg -i` the package on
+   another (or a VM); run the fixture above with each, then `dpkg -r` and
+   check `~/.config/organizer` and `~/.local/share/organizer` are still there.
 
 ## Security issues
 

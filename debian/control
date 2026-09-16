@@ -1,0 +1,30 @@
+Source: organizer
+Section: utils
+Priority: optional
+Maintainer: Raajeshwar Elagovan <raajeshwar43@gmail.com>
+Build-Depends: debhelper-compat (= 13), dh-python, python3
+Standards-Version: 4.6.2
+Homepage: https://github.com/RaajeshwarElagovan/organizer
+Rules-Requires-Root: no
+X-Python3-Version: >= 3.8
+
+Package: organizer
+Architecture: all
+Depends: ${python3:Depends}, ${misc:Depends}
+Recommends: systemd, file
+Description: report-only file classifier with a self-learning memory
+ organizer scans a directory and proposes a folder structure and a per-file
+ action (move, archive, delete, keep, review) from names, types and stat()
+ metadata only. It never reads file contents and never moves, renames or
+ deletes user files: applying a report is left to the user or an external
+ agent reading the JSON. On kernels with Landlock the daemon and CLI restrict
+ their own writes to ~/.config/organizer, ~/.local/share/organizer and the
+ socket directory.
+ .
+ A systemd --user unit is shipped in /usr/lib/systemd/user; it is not enabled
+ automatically (run `systemctl --user enable --now organizer`). Without the
+ daemon the CLI runs in-process.
+ .
+ The optional AI stage uses the external `claude` CLI (Claude Code), which is
+ not part of this package; without it the rule engine still works and
+ undecided entries are reported as `review`.

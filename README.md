@@ -77,16 +77,19 @@ Two stages per scan:
 
 ## Install
 
+Requirements: Linux, `/usr/bin/python3` ≥ 3.8 (stdlib only, nothing to
+`pip install`; tested on 3.8–3.14), optionally `systemd --user` for the
+daemon, optionally `file` for magic-byte MIME detection, and the `claude`
+CLI logged in for the AI stage. `claude` is external and optional in both
+install methods — it is never bundled.
+
+### Source installation (per user)
+
 ```sh
 git clone https://github.com/RaajeshwarElagovan/organizer.git && cd organizer
 ./install.sh            # -> ~/.local/lib/organizer, ~/.local/bin/organizer, systemd --user unit
 cd ~/Downloads && organizer
 ```
-
-Requirements: Linux, `/usr/bin/python3` ≥ 3.8 (stdlib only, nothing to
-`pip install`; tested on 3.8–3.14), optionally `systemd --user` for the
-daemon, optionally `file` for magic-byte MIME detection, and the `claude`
-CLI logged in for the AI stage.
 
 The installer writes only under `$HOME`: `~/.local/lib/organizer` (code),
 `~/.local/bin/organizer` (launcher), `~/.config/systemd/user/organizer.service`,
@@ -100,6 +103,35 @@ daemon up at boot before any login, opt in with `ORGANIZER_LINGER=1
 `loginctl disable-linger $USER`). `./uninstall.sh` removes the code, launcher
 and unit and keeps your memory and reports; `./uninstall.sh --purge` removes
 those too.
+
+### Debian / Ubuntu package (system-wide code, per-user data)
+
+```sh
+sudo dpkg -i organizer_0.1.0-1_all.deb     # or: sudo apt install ./organizer_0.1.0-1_all.deb
+systemctl --user enable --now organizer    # per user, optional: start the daemon for your login session
+cd ~/Downloads && organizer
+```
+
+The package depends only on `python3 (>= 3.8)` (`file` and `systemd` are
+Recommends) and installs the code to `/usr/lib/python3/dist-packages/organizer`,
+the launcher to `/usr/bin/organizer`, the immutable starting memory to
+`/usr/share/organizer/seed/memory.json`, the user unit to
+`/usr/lib/systemd/user/organizer.service` and the docs to
+`/usr/share/doc/organizer/`. It does **not** enable or start the daemon for
+anyone, does not enable lingering, and never creates, changes or deletes
+anything under a user's home: each user's `~/.config/organizer/memory.json`
+is seeded from the system seed on that user's first run, and
+`~/.config/organizer` / `~/.local/share/organizer` survive `dpkg -r` and
+`dpkg -P` (delete them yourself if you want them gone). Without the unit
+enabled the CLI runs in-process, exactly like the source install without
+`systemd --user`. The only maintainer scripts are the standard Python
+byte-compile hooks (`py3compile` / `py3clean` on
+`/usr/lib/python3/dist-packages/organizer`). The source install and the
+package can coexist; `~/.local/bin` usually precedes `/usr/bin` on `PATH`, so
+run `./uninstall.sh` first if you switch.
+
+Release artifacts (`organizer_0.1.0-1_all.deb`, `organizer-0.1.0.tar.gz`) are
+built with `./build-dist.sh` into `dist/` — see `CONTRIBUTING.md` → *Releasing*.
 
 Without the `claude` CLI the tool still works; ambiguous entries show as
 `review` with the tentative decision. Note that the **daemon** looks for
@@ -173,4 +205,6 @@ organizer/daemon.py      Unix-socket daemon (systemd --user)
 organizer/cli.py         client + in-process fallback
 organizer/report.py      terminal rendering
 seed/memory.json         starting memory
+systemd/organizer.service  user unit for the source install (debian/systemd-user/ has the packaged one)
+debian/                  Debian packaging (dpkg-buildpackage -b); build-dist.sh builds dist/
 ```

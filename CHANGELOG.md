@@ -95,6 +95,23 @@ Initial release.
   automated CLI / in-process / dev-daemon smoke run
   (`.github/scripts/smoke.sh`) on Python 3.8, 3.12 and 3.14, in a throw-away
   `$HOME` without Claude; new tests for the glob-only policy on Claude rules.
+- **Debian package** (`debian/`, `Architecture: all`, depends only on
+  `python3 (>= 3.8)`): code in `/usr/lib/python3/dist-packages/organizer`,
+  `/usr/bin/organizer`, seed at `/usr/share/organizer/seed/memory.json`,
+  user unit at `/usr/lib/systemd/user/organizer.service` (same security
+  directives as the source unit, not enabled automatically), docs and
+  licence under `/usr/share/doc/organizer`. No maintainer scripts beyond the
+  standard `py3compile`/`py3clean` hooks; removal never touches
+  `~/.config/organizer` or `~/.local/share/organizer`. `./build-dist.sh`
+  builds `dist/organizer_<v>-1_all.deb` and the reproducible source tarball
+  `dist/organizer-<v>.tar.gz` (`git archive`). `tests/test_packaging.py`
+  checks the metadata, the packaged unit against the source unit, seed
+  resolution and (when debhelper is present) the built package.
+- Seed lookup (`paths.SEED_MEMORY`): `$ORGANIZER_SEED`, then `seed/` next
+  to the package (checkout, `~/.local/lib/organizer`), then
+  `<dir>/organizer/seed/memory.json` for each dir in `$XDG_DATA_DIRS`
+  (default `/usr/local/share:/usr/share`). Seeding semantics are unchanged:
+  only when `memory.json` does not exist, never overwriting it.
 
 ### Changed
 - Seed memory no longer ships the maintainer's own `firmware-release-*.zip`

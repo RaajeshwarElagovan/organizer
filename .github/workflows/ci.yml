@@ -100,7 +100,7 @@ jobs:
           python -c 'import json
           with open("seed/memory.json") as f:
               json.load(f)'
-          bash -n install.sh uninstall.sh .github/scripts/smoke.sh
+          bash -n install.sh uninstall.sh build-dist.sh .github/scripts/smoke.sh
 
       - name: Unit tests
         run: |
@@ -169,3 +169,93 @@ jobs:
             ${{ runner.temp }}/smoke.log
             ${{ steps.home.outputs.home }}/organizer-smoke.*/out/
           if-no-files-found: ignore
+
+  package:
+    # Build the release artifacts the way build-dist.sh does, install the .deb
+    # for real (root, clean runner), exercise the packaged install without
+    # Claude, then remove it and prove the user's config/data survived.
+    name: debian package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends dpkg-dev debhelper dh-python fakeroot lintian
+
+      - name: Build dist/
+        run: |
+          ./build-dist.sh
+          ls -l dist
+          dpkg-deb --info dist/organizer_*_all.deb
+          dpkg-deb --contents dist/organizer_*_all.deb
+
+      - name: Packaging tests
+        env:
+          PYTHONWARNINGS: "error::ResourceWarning"
+        run: PYTHONPATH=. python3 -X dev -m unittest tests.test_packaging -v
+
+      - name: Tarball is the git tree
+        run: |
+          v="$(python3 -c 'import organizer; print(organizer.__version__)')"
+          tar -tzf "dist/organizer-$v.tar.gz" | sed "s|^organizer-$v/||" | grep -v '/$' | LC_ALL=C sort > /tmp/tar.lst
+          git ls-files | LC_ALL=C sort > /tmp/git.lst
+          diff /tmp/git.lst /tmp/tar.lst
+          ! tar -tzf "dist/organizer-$v.tar.gz" | grep -E '\.git/|__pycache__|\.pyc$|^organizer-[^/]*/dist/'
+
+      - name: Install package (root)
+        run: |
+          sudo dpkg -i dist/organizer_*_all.deb
+          dpkg -s organizer | grep -E '^(Version|Architecture|Status)'
+          organizer --version
+          test "$(readlink -f "$(command -v organizer)")" = /usr/bin/organizer
+          python3 -c 'import organizer, organizer.paths as p; assert organizer.__file__.startswith("/usr/lib/python3/dist-packages/"), organizer.__file__; assert p.SEED_MEMORY == "/usr/share/organizer/seed/memory.json", p.SEED_MEMORY'
+          test -f /usr/lib/systemd/user/organizer.service
+          systemd-analyze --user verify /usr/lib/systemd/user/organizer.service || true
+
+      - name: Exercise packaged install (no Claude, in-process and daemon)
+        run: |
+          for v in $(env | grep -o '^CLAUDE[A-Z_]*' || true); do unset "$v"; done
+          if command -v claude >/dev/null; then echo "::error::'claude' must not be on PATH"; exit 1; fi
+          cd "$RUNNER_TEMP" && mkdir -p fix/project.zip-extracted && touch "fix/report (1).pdf" fix/report.pdf fix/notes "fix/Screenshot from 2026-01-02.png"
+          before="$(cd fix && find . -printf '%p %m %s %T@ %y\n' | LC_ALL=C sort)"
+          test ! -e "$HOME/.config/organizer/memory.json"
+          organizer --no-daemon status
+          organizer --no-daemon status --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["memory_error"] is None and d["rules"] > 0 and d["claude_cli"] is None, d'
+          cmp "$HOME/.config/organizer/memory.json" /usr/share/organizer/seed/memory.json
+          organizer --no-daemon fix --json 2>err.txt | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["report_only"] and d["summary"]["entries"] == 5 and d["ai"]["used"] is False, d'
+          ! grep -q "no kernel sandbox" err.txt || echo "::warning::no Landlock on this runner"
+          # the packaged unit's exact command line, as a plain process (no user manager on the runner)
+          mkdir -p "$RUNNER_TEMP/rt" && chmod 700 "$RUNNER_TEMP/rt"
+          ( cd "$HOME" && env XDG_RUNTIME_DIR="$RUNNER_TEMP/rt" PYTHONSAFEPATH=1 PYTHONUNBUFFERED=1 PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" /usr/bin/python3 -m organizer.daemon 2> "$RUNNER_TEMP/daemon.err" & echo $! > "$RUNNER_TEMP/dpid" )
+          for _ in $(seq 1 100); do [ -S "$RUNNER_TEMP/rt/organizer/organizer.sock" ] && break; sleep 0.1; done
+          test -S "$RUNNER_TEMP/rt/organizer/organizer.sock" || { cat "$RUNNER_TEMP/daemon.err"; exit 1; }
+          XDG_RUNTIME_DIR="$RUNNER_TEMP/rt" organizer status
+          XDG_RUNTIME_DIR="$RUNNER_TEMP/rt" organizer status --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["pid"] == int(open(sys.argv[1]).read()); print("sandbox:", d["sandbox"])' "$RUNNER_TEMP/dpid"
+          XDG_RUNTIME_DIR="$RUNNER_TEMP/rt" organizer fix --json 2>derr.txt | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["report_only"] and d["summary"]["entries"] == 5, d'
+          ! grep -q "running in-process" derr.txt
+          kill -TERM "$(cat "$RUNNER_TEMP/dpid")"; sleep 1
+          cat "$RUNNER_TEMP/daemon.err"
+          test "$(cd fix && find . -printf '%p %m %s %T@ %y\n' | LC_ALL=C sort)" = "$before"
+          ls "$HOME/.local/share/organizer/reports"/*/latest.json
+
+      - name: Reinstall, remove, purge — user data untouched
+        run: |
+          digest() { (cd "$1" && find . -type f -exec sha256sum {} + | LC_ALL=C sort | sha256sum); }
+          c="$(digest "$HOME/.config/organizer")"; d="$(digest "$HOME/.local/share/organizer")"
+          sudo dpkg -i dist/organizer_*_all.deb
+          organizer --version
+          sudo dpkg -r organizer
+          test ! -e /usr/bin/organizer && test ! -e /usr/lib/python3/dist-packages/organizer && test ! -e /usr/lib/systemd/user/organizer.service
+          sudo dpkg -i dist/organizer_*_all.deb && sudo dpkg -P organizer
+          test ! -e /usr/share/organizer && test ! -e /usr/share/doc/organizer
+          test "$(digest "$HOME/.config/organizer")" = "$c"
+          test "$(digest "$HOME/.local/share/organizer")" = "$d"
+          echo "user config/data preserved across reinstall, remove and purge"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

@@ -35,7 +35,7 @@ first.
 
 | file | role |
 |---|---|
-| `organizer/paths.py` | XDG-style locations; `ORGANIZER_CONFIG_DIR`, `ORGANIZER_DATA_DIR`, `ORGANIZER_SOCKET` overrides; `socket_dir()`; `ensure_dirs()` creates the three writable dirs before the sandbox is applied and refuses a squatted socket dir; `dir_slug()` for report folders |
+| `organizer/paths.py` | XDG-style locations; `ORGANIZER_CONFIG_DIR`, `ORGANIZER_DATA_DIR`, `ORGANIZER_SOCKET`, `ORGANIZER_SEED` overrides; `SEED_MEMORY` = sibling `seed/` (checkout, `~/.local/lib/organizer`) or `<XDG_DATA_DIRS>/organizer/seed/memory.json` (Debian package); `socket_dir()`; `ensure_dirs()` creates the three writable dirs before the sandbox is applied and refuses a squatted socket dir; `dir_slug()` for report folders |
 | `organizer/scanner.py` | Collects **facts** per entry: name, stem/ext (multi-ext aware), MIME guess, size, mtime/atime age, mode bits, name **signals** (regex table), and cross-file signals (identical duplicates, revision duplicates, version series, archive already extracted) |
 | `organizer/classifier.py` | **Stage 1**: dir ignore list → redundancy heuristics → memory rules → directory handling → category table → age policy. Produces a proposal per entry with `action`, `target`, `confidence`, `reasons`, `rule_id`, `decided_by` |
 | `organizer/brain.py` | **Stage 2** and **consolidation**: builds prompts, runs `claude -p` with a JSON schema, merges returned decisions / new rules into memory. Owns the unrestricted `_Runner` thread |
@@ -47,13 +47,15 @@ first.
 | `organizer/cli.py` | argparse front-end, daemon client with in-process fallback, `memory show/validate/path` |
 | `organizer/report.py` | Terminal rendering of a report dict |
 | `organizer/prompts/*.md` | System prompts for the propose and learn calls |
-| `seed/memory.json` | Initial memory installed on first run |
+| `seed/memory.json` | Initial memory installed on first run (`/usr/share/organizer/seed/memory.json` in the Debian package) |
 | `tests/test_claude_boundary.py` | Unit + integration tests for the model-output boundary (`python3 -m unittest discover -s tests`) |
 | `tests/test_sandbox.py`, `tests/sandbox_probe.py` | Adversarial tests of the Landlock write boundary in daemon and in-process mode |
 | `tests/test_learning.py` | Learning layers 1 and 2 against the real pipeline with Claude mocked |
 | `tests/test_lifecycle.py` | `install.sh` / `uninstall.sh` / daemon / CLI lifecycle in a throw-away `$HOME` with `systemctl` shims |
-| `systemd/organizer.service` | User unit; `RuntimeDirectory=organizer` (0700) for the socket; `ProtectSystem=strict` + `ReadWritePaths` as a second sandbox layer where supported |
+| `tests/test_packaging.py` | `debian/` metadata, packaged unit ≡ source unit minus `PYTHONPATH`/`Documentation`, seed resolution, and the built `.deb` when debhelper is available |
+| `systemd/organizer.service` | User unit for the source install; `RuntimeDirectory=organizer` (0700) for the socket; `ProtectSystem=strict` + `ReadWritePaths` as a second sandbox layer where supported |
 | `install.sh` / `uninstall.sh` | Copy to `~/.local/lib/organizer`, launcher in `~/.local/bin` (`PYTHONSAFEPATH=1`), enable + restart unit; lingering only with `ORGANIZER_LINGER=1`. Uninstall keeps config/data unless `--purge` |
+| `debian/`, `build-dist.sh` | Debian packaging (`dh --with python3`, files placed by `debian/install`, unit via `debian/install` so no enable/mask snippets are generated; `debian/systemd-user/organizer.service` is the packaged unit). `build-dist.sh` writes `dist/organizer-<v>.tar.gz` (`git archive`) and `dist/organizer_<v>-1_all.deb` (built from that tarball in a scratch dir) |
 
 ## Request lifecycle for `organizer` (scan)
 

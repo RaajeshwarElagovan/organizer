@@ -13,7 +13,30 @@ STATE_PATH = os.path.join(DATA_DIR, "state.json")
 REPORTS_DIR = os.path.join(DATA_DIR, "reports")
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMPTS_DIR = os.path.join(PKG_DIR, "prompts")
-SEED_MEMORY = os.path.join(os.path.dirname(PKG_DIR), "seed", "memory.json")
+
+
+def _find_seed() -> str:
+    """The immutable starting memory. Checked in order: $ORGANIZER_SEED; the
+    tree next to the package (checkout, ~/.local/lib/organizer); then
+    <dir>/organizer/seed/memory.json for each dir in $XDG_DATA_DIRS
+    (default /usr/local/share:/usr/share — where the Debian package puts it).
+    Only used by memory.seed_if_missing, i.e. when there is no memory.json yet."""
+    override = os.environ.get("ORGANIZER_SEED")
+    if override:
+        return override
+    local = os.path.join(os.path.dirname(PKG_DIR), "seed", "memory.json")
+    if os.path.exists(local):
+        return local
+    data_dirs = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
+    for d in data_dirs.split(":"):
+        if d:
+            candidate = os.path.join(d, "organizer", "seed", "memory.json")
+            if os.path.exists(candidate):
+                return candidate
+    return local
+
+
+SEED_MEMORY = _find_seed()
 
 
 def socket_dir() -> str:

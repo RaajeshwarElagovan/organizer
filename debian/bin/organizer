@@ -1,0 +1,8 @@
+#!/usr/bin/python3
+# Launcher installed by the Debian package as /usr/bin/organizer. The module
+# lives in /usr/lib/python3/dist-packages; a script (unlike `python3 -m`) keeps
+# the current directory off sys.path, so a checkout is never imported by accident.
+from organizer.cli import main
+
+if __name__ == "__main__":
+    main()
