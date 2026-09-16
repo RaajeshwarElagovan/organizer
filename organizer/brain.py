@@ -1,7 +1,9 @@
 """Stage 2: Claude via the `claude -p` CLI (Claude Code login; no API key, no tools)."""
 import json
+import math
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -9,6 +11,7 @@ import time
 
 from . import paths
 from . import memory as memmod
+from .memory import ARCHIVE_DIR
 
 PROPOSAL_SCHEMA = {
     "type": "object",
@@ -34,7 +37,6 @@ PROPOSAL_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "glob": {"type": "string"},
-                    "regex": {"type": "string"},
                     "category": {"type": "string"},
                     "category_dir": {"type": "string"},
                     "action": {"type": "string", "enum": list(memmod.ACTIONS)},
@@ -186,6 +188,8 @@ def run_claude(system_prompt: str, user_prompt: str, schema: dict, settings: dic
                 data = json.loads(raw)
             except json.JSONDecodeError:
                 raise BrainError("claude result is not JSON: %s" % raw[:200])
+    if not isinstance(data, dict):
+        raise BrainError("claude result is not a JSON object (%s)" % type(data).__name__)
     if log:
         log("claude: ok in %.1fs, cost $%.4f" % (time.time() - t0, float(outer.get("total_cost_usd", 0) or 0)))
     data["_meta"] = {"cost_usd": outer.get("total_cost_usd"), "duration_s": round(time.time() - t0, 1),
@@ -238,67 +242,210 @@ def propose(undecided, decided, existing_dirs, mem, cwd, log=None) -> dict:
     return data
 
 
-def merge_proposals(undecided: list, data: dict, mem: dict) -> list:
-    """Overlay Claude decisions on undecided proposals; returns names not answered."""
+MAX_REASON_LEN = 300
+_WS = re.compile(r"\s+")
+
+
+class _Reject(Exception):
+    """A Claude-generated item failed application-side validation."""
+
+
+def _num(v, lo=0.0, hi=1.0):
+    """Finite number clamped to [lo, hi]; bool/str/NaN/inf are rejected."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+        raise _Reject("confidence must be a finite number")
+    return round(max(lo, min(hi, float(v))), 3)
+
+
+def _text(v, limit):
+    """Model-supplied free text: collapse whitespace/control chars, cap length."""
+    return _WS.sub(" ", memmod._CTRL_CHARS.sub(" ", str(v if v is not None else ""))).strip()[:limit]
+
+
+def _archive_default(p: dict) -> str:
+    mtime = time.time() - float(p.get("age_days", 0) or 0) * 86400
+    return "%s/%s" % (ARCHIVE_DIR, time.strftime("%Y", time.localtime(mtime)))
+
+
+def _inside(cwd: str, rel: str) -> bool:
+    """The realpath of cwd/rel must stay under realpath(cwd) — catches symlinked sub-dirs."""
+    root = os.path.realpath(cwd)
+    dest = os.path.realpath(os.path.join(root, rel))
+    return dest.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def validate_target(action: str, target, category, mem: dict, cwd=None, p=None):
+    """Return the destination for a Claude-decided action, or raise _Reject.
+
+    move     -> relative path (Claude's target, else the category's dir); stays under cwd
+    archive  -> relative path under _archive/ (default _archive/<year of the entry>)
+    move-to  -> configured target name or ~/... path
+    others   -> None
+    """
+    if action in ("delete", "keep", "review"):
+        return None
+    if action == "move-to":
+        t = memmod.clean_move_to_target(target, mem)
+        if t is None:
+            raise _Reject("move-to target %r is not a configured target or a ~/ path" % (target,))
+        return t
+    if action == "archive":
+        if target in (None, ""):
+            return _archive_default(p or {})
+        t = memmod.clean_archive_target(target)
+        if t is None:
+            raise _Reject("archive target %r must be a relative path under %s/" % (target, ARCHIVE_DIR))
+    else:  # move
+        if target in (None, ""):
+            cat = mem.get("categories", {}).get(category or "")
+            target = cat.get("dir") if isinstance(cat, dict) else None
+            if target is None:
+                raise _Reject("move without a target or known category")
+        t = memmod.clean_relative_target(target)
+        if t is None:
+            raise _Reject("move target %r must be a relative path without '..'" % (target,))
+    if cwd and not _inside(cwd, t):
+        raise _Reject("target %r resolves outside the scanned directory" % (t,))
+    return t
+
+
+def _check_proposal(cp, p: dict, mem: dict, cwd):
+    """Validate one Claude proposal against the entry it claims to decide."""
+    if not isinstance(cp, dict):
+        raise _Reject("proposal is not an object")
+    action = cp.get("action")
+    if action not in memmod.ACTIONS:
+        raise _Reject("unknown action %r" % (action,))
+    conf = _num(cp.get("confidence"))
+    category = cp.get("category")
+    if category in (None, ""):
+        category = p.get("category")
+    elif memmod.clean_category_key(category) is None:
+        raise _Reject("invalid category %r" % (category,))
+    target = validate_target(action, cp.get("target"), category, mem, cwd, p)
+    return {"action": action, "category": category, "target": target, "confidence": conf, "reason": _text(cp.get("reason"), MAX_REASON_LEN)}
+
+
+def merge_proposals(undecided: list, data: dict, mem: dict, cwd=None) -> dict:
+    """Overlay validated Claude decisions on undecided proposals.
+
+    Returns {name: reason} for every entry that was not decided — either Claude
+    did not answer for it or its answer failed validation. Nothing from `data`
+    reaches a proposal without passing _check_proposal.
+    """
     by_name = {p["name"]: p for p in undecided}
-    answered = set()
-    for cp in data.get("proposals", []):
-        p = by_name.get(cp.get("name"))
-        if not p:
+    answered, rejected = set(), {}
+    items = data.get("proposals") if isinstance(data, dict) else None
+    for cp in items if isinstance(items, list) else []:
+        name = cp.get("name") if isinstance(cp, dict) else None
+        p = by_name.get(name) if isinstance(name, str) else None
+        if not p or name in answered:
             continue
-        action = cp.get("action")
-        if action not in memmod.ACTIONS:
+        try:
+            ok = _check_proposal(cp, p, mem, cwd)
+        except _Reject as e:
+            rejected[name] = "Claude proposal rejected: %s" % e
             continue
-        p["action"] = action
-        p["category"] = cp.get("category") or p.get("category")
-        target = cp.get("target") or None
-        if action in ("move", "archive", "move-to") and not target:
-            cat = mem.get("categories", {}).get(p["category"] or "")
-            target = cat["dir"] if cat else None
-        if action in ("delete", "keep", "review"):
-            target = None
-        if action == "move" and target:
-            target = target.strip("/").replace("\\", "/")
-        p["target"] = target
-        p["confidence"] = round(max(0.0, min(1.0, float(cp.get("confidence", 0.6)))), 3)
-        p["reasons"] = ["claude: " + str(cp.get("reason", "")).strip()]
+        p["action"] = ok["action"]
+        p["category"] = ok["category"]
+        p["target"] = ok["target"]
+        p["confidence"] = ok["confidence"]
+        p["reasons"] = ["claude: " + ok["reason"]]
         p["decided_by"] = "claude"
         p["rule_id"] = None
-        answered.add(p["name"])
-    return [n for n in by_name if n not in answered]
+        answered.add(name)
+        rejected.pop(name, None)
+    out = {}
+    for n in by_name:
+        if n not in answered:
+            out[n] = rejected.get(n, "Claude did not answer for this entry")
+    return out
 
 
-def merge_new_rules(data: dict, mem: dict) -> list:
+def _broad_glob(g: str) -> bool:
+    g = g.strip().lower()
+    return g in ("*", "*.*", "?", "**") or (g.startswith("*.") and g.count("*") == 1 and len(g) <= 6)
+
+
+def _check_new_rule(nr, mem: dict) -> dict:
+    """Validate a Claude-suggested rule; returns a memory rule dict or raises _Reject.
+
+    Model-generated rules match by `glob` only. `regex` is a user-only match key
+    (MEMORY-GUIDE.md): a regex the model wrote would run against every file name
+    on every scan, and match_problems() is only a heuristic against backtracking
+    (THREAT-MODEL.md), so it is refused here regardless of its content.
+    """
+    if not isinstance(nr, dict):
+        raise _Reject("rule is not an object")
+    if "regex" in nr:
+        raise _Reject("regex rules are user-only; model rules must use glob")
+    match = {}
+    if nr.get("glob") not in (None, ""):
+        match["glob"] = nr["glob"]
+    if not match:
+        raise _Reject("rule needs a glob")
+    probs = memmod.match_problems(match)
+    if probs:
+        raise _Reject("; ".join(probs))
+    if "glob" in match and _broad_glob(match["glob"]):
+        raise _Reject("over-broad glob %r" % match["glob"])
+    action = nr.get("action")
+    if action not in memmod.ACTIONS:
+        raise _Reject("unknown action %r" % (action,))
+    conf = _num(nr.get("confidence", 0.7), 0.5, 0.95)
+    cat = nr.get("category")
+    if cat in (None, ""):
+        cat = None
+    elif memmod.clean_category_key(cat) is None:
+        raise _Reject("invalid category %r" % (cat,))
+    cat_dir = None
+    if cat and cat not in mem.get("categories", {}):
+        raw = nr.get("category_dir")
+        if raw in (None, ""):
+            raw = "/".join(part.replace("-", " ").title().replace(" ", "-") for part in cat.split("/"))
+        cat_dir = memmod.clean_relative_target(raw)
+        if cat_dir is None:
+            raise _Reject("invalid category_dir %r" % (raw,))
+    rule = {"match": match, "category": cat, "action": action, "scope": "global", "confidence": conf,
+            "hits": 0, "contradictions": 0, "source": "claude", "note": _text(nr.get("note"), 200),
+            "created": int(time.time())}
+    target = nr.get("target")
+    if target not in (None, ""):
+        if action == "move-to":
+            rule["target"] = memmod.clean_move_to_target(target, mem)
+        elif action == "archive":
+            rule["target"] = memmod.clean_archive_target(target)
+        elif action == "move":
+            rule["target"] = memmod.clean_relative_target(target)
+        else:
+            target = None
+        if target is not None and rule.get("target") is None:
+            raise _Reject("invalid target %r for action %s" % (target, action))
+    if action == "move-to" and not rule.get("target"):
+        raise _Reject("move-to rule needs a target")
+    if action == "move" and not rule.get("target") and not cat:
+        raise _Reject("move rule needs a target or category")
+    return rule, cat_dir
+
+
+def merge_new_rules(data: dict, mem: dict, log=None) -> list:
     added = []
-    for nr in data.get("new_rules", [])[:5]:
-        match = {}
-        if nr.get("glob"):
-            match["glob"] = nr["glob"]
-        if nr.get("regex"):
-            match["regex"] = nr["regex"]
-        if not match or nr.get("action") not in memmod.ACTIONS:
+    items = data.get("new_rules") if isinstance(data, dict) else None
+    for nr in (items if isinstance(items, list) else [])[:5]:
+        try:
+            rule, cat_dir = _check_new_rule(nr, mem)
+        except _Reject as e:
+            if log:
+                log("claude: new rule rejected: %s" % e)
             continue
-        if match.get("glob") in ("*", "*.*") or (match.get("glob", "").startswith("*.") and match["glob"].count("*") == 1 and len(match["glob"]) <= 6):
-            continue  # reject over-broad globs like "*.pdf"
-        dup = any(r.get("match") == match and r.get("action") == nr["action"] for r in mem["rules"])
-        if dup:
+        if any(r.get("match") == rule["match"] and r.get("action") == rule["action"] for r in mem["rules"]):
             continue
-        cat = nr.get("category")
-        if cat and cat not in mem["categories"]:
-            d = nr.get("category_dir") or "/".join(part.replace("-", " ").title().replace(" ", "-") for part in cat.split("/"))
-            mem["categories"][cat] = {"dir": d, "confidence": 0.8, "note": nr.get("note", "")}
-        rule = {"id": memmod.new_rule_id(mem, match.get("glob") or match.get("regex")), "match": match,
-                "category": cat, "action": nr["action"], "scope": "global",
-                "confidence": round(max(0.5, min(0.95, float(nr.get("confidence", 0.7)))), 3),
-                "hits": 0, "contradictions": 0, "source": "claude", "note": str(nr.get("note", ""))[:200],
-                "created": int(time.time())}
-        if nr.get("target"):
-            rule["target"] = nr["target"]
-        if rule["action"] == "move-to" and not rule.get("target"):
-            continue
+        if cat_dir is not None:
+            mem["categories"][rule["category"]] = {"dir": cat_dir, "confidence": 0.8, "note": rule["note"]}
+        rule["id"] = memmod.new_rule_id(mem, rule["match"]["glob"])
         mem["rules"].append(rule)
         added.append(rule["id"])
-    notes = str(data.get("memory_notes") or "").strip()
+    notes = _text(data.get("memory_notes") if isinstance(data, dict) else "", 2000)
     if notes:
         combined = (mem.get("claude_notes", "") + "\n" + notes).strip()
         mem["claude_notes"] = combined[-2000:]

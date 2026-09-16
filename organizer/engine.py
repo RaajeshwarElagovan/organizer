@@ -8,6 +8,7 @@ import copy
 import glob
 import json
 import os
+import stat
 import time
 
 from . import brain, classifier, memory as memmod, paths, scanner
@@ -54,8 +55,26 @@ def _resolve_target(cwd: str, target):
     return t if os.path.isabs(t) else os.path.join(cwd, t)
 
 
-def _find_elsewhere(cwd: str, name: str, mem: dict, exclude: str):
-    """Shallow search (depth 2 under cwd, plus configured targets) for a moved file."""
+def _present(directory, name: str, size):
+    """None: no such name there. True: present and (if the proposal recorded a size)
+    the same size — a rename(2) keeps size, so this is the file we proposed about.
+    False: same name but another size — an unrelated file, or ours edited after
+    the move; name+size cannot tell, so callers treat it as ambiguous."""
+    if not directory:
+        return None
+    try:
+        st = os.lstat(os.path.join(directory, name))
+    except OSError:
+        return None
+    if size is None or stat.S_ISDIR(st.st_mode):
+        return True
+    return st.st_size == size
+
+
+def _find_elsewhere(cwd: str, name: str, mem: dict, exclude: str, size=None):
+    """Shallow search (depth 2 under cwd, plus configured targets) for a moved file.
+    Returns (where, ambiguous): `where` is the folder holding a same-name file of
+    the recorded size, `ambiguous` whether a same-name file of another size was seen."""
     candidates = []
     try:
         with os.scandir(cwd) as it:
@@ -71,13 +90,17 @@ def _find_elsewhere(cwd: str, name: str, mem: dict, exclude: str):
             pass
     for t in mem.get("targets", {}).values():
         candidates.append(os.path.expanduser(t))
+    ambiguous = False
     for d in candidates:
         if exclude and os.path.abspath(d) == os.path.abspath(exclude):
             continue
-        if os.path.exists(os.path.join(d, name)):
+        hit = _present(d, name, size)
+        if hit:
             rel = os.path.relpath(d, cwd)
-            return d if rel.startswith("..") else rel
-    return None
+            return (d if rel.startswith("..") else rel), ambiguous
+        if hit is False:
+            ambiguous = True
+    return None, ambiguous
 
 
 def detect_outcomes(mem: dict, dstate: dict, cwd: str, current: set, log=_log) -> list:
@@ -98,16 +121,22 @@ def detect_outcomes(mem: dict, dstate: dict, cwd: str, current: set, log=_log) -
                 outcomes.append(_outcome(name, p, "ignored"))
             continue
         target_path = _resolve_target(cwd, p.get("target"))
-        if target_path and os.path.exists(os.path.join(target_path, name)):
+        size = p.get("size")
+        at_target = _present(target_path, name, size)
+        if at_target:
             outcomes.append(_outcome(name, p, "confirmed"))
+            continue
+        where, ambiguous = _find_elsewhere(cwd, name, mem, target_path, size)
+        if where:
+            outcomes.append(_outcome(name, p, "moved_elsewhere:" + where))
+        elif at_target is False or ambiguous:
+            # a same-name file of another size exists: we cannot tell "deleted, unrelated
+            # file elsewhere" from "moved and then edited". No evidence is safer than wrong.
+            log("outcome: %s -> ambiguous (same name, different size found); not learned" % name)
         elif action == "delete":
             outcomes.append(_outcome(name, p, "confirmed"))
         else:
-            where = _find_elsewhere(cwd, name, mem, target_path)
-            if where:
-                outcomes.append(_outcome(name, p, "moved_elsewhere:" + where))
-            else:
-                outcomes.append(_outcome(name, p, "deleted"))
+            outcomes.append(_outcome(name, p, "deleted"))
     for o in outcomes:
         kind = o["observed"].split(":", 1)[0]
         memmod.adjust_rule(mem, o["proposed"].get("rule_id"), kind)
@@ -143,6 +172,9 @@ def run_scan(cwd: str, opts: dict, store: MemoryStore, state: dict, log=_log) ->
     outcomes = detect_outcomes(mem, dstate, cwd, names, log)
 
     proposals = classifier.classify(scan, mem)
+    for p in proposals:   # rule/category dirs are validated as shapes; only here is cwd known
+        if p["action"] in ("move", "archive") and p["target"] and not brain._inside(cwd, p["target"]):
+            _to_review(p, "target %r resolves outside the scanned directory" % p["target"])
     threshold = float(settings["ai_threshold"])
     decided, undecided = classifier.split_undecided(proposals, threshold)
 
@@ -163,26 +195,35 @@ def run_scan(cwd: str, opts: dict, store: MemoryStore, state: dict, log=_log) ->
                 to_ask.append(p)
         if cached_data["proposals"]:
             hit = [p for p in undecided if p not in to_ask]
-            brain.merge_proposals(hit, cached_data, mem)
+            rejected = brain.merge_proposals(hit, cached_data, mem, cwd)
             for p in hit:
-                p["reasons"].append("(cached)")
-            ai["cached"] = len(hit)
+                if p["name"] in rejected:      # stale/invalid cached decision: drop it
+                    cache.pop(p["name"], None)
+                    _to_review(p, rejected[p["name"]])
+                else:
+                    p["reasons"].append("(cached)")
+            ai["cached"] = len(hit) - len(rejected)
             ai["used"] = True
         if to_ask:
             ai["asked"] = len(to_ask)
             try:
                 data = brain.propose(to_ask, decided + [p for p in undecided if p not in to_ask],
                                      scan["existing_dirs"], mem, cwd, log)
+                if not isinstance(data, dict):
+                    raise brain.BrainError("claude result is not a JSON object")
                 ai["cost_usd"] = data.get("_meta", {}).get("cost_usd")
-                ai["new_rules"] = brain.merge_new_rules(data, mem)
-                unanswered = brain.merge_proposals(to_ask, data, mem)
+                ai["new_rules"] = brain.merge_new_rules(data, mem, log)
+                unanswered = brain.merge_proposals(to_ask, data, mem, cwd)
                 now_ts = int(time.time())
-                for cp in data.get("proposals", []):
-                    if cp.get("name") in facts_by_name and cp.get("name") not in unanswered:
-                        cache[cp["name"]] = {"key": _entry_key(facts_by_name[cp["name"]]), "ts": now_ts, "decision": cp}
+                asked_names = {p["name"] for p in to_ask}
+                for cp in data.get("proposals", []) if isinstance(data.get("proposals"), list) else []:
+                    name = cp.get("name") if isinstance(cp, dict) else None
+                    if name in asked_names and name not in unanswered:   # only validated decisions are cached
+                        cache[name] = {"key": _entry_key(facts_by_name[name]), "ts": now_ts, "decision": cp}
                 for p in to_ask:
                     if p["name"] in unanswered:
-                        _to_review(p, "Claude did not answer for this entry")
+                        log("claude: %s -> review (%s)" % (p["name"], unanswered[p["name"]]))
+                        _to_review(p, unanswered[p["name"]])
                 ai["used"] = True
             except brain.BrainError as e:
                 ai["error"] = str(e)
@@ -337,6 +378,8 @@ def explain(cwd: str, name: str, store: MemoryStore, state: dict) -> dict:
 
 def consolidate(store: MemoryStore, lock=None, dry_run: bool = False, log=_log) -> dict:
     mem = store.get()
+    if store.last_error and os.path.exists(store.path):
+        return {"applied": False, "reason": "memory.json on disk is invalid (%s); fix it first" % store.last_error}
     if not mem["learned"]["pending"]:
         return {"applied": False, "reason": "no pending outcomes"}
     snapshot = copy.deepcopy(mem)
@@ -356,7 +399,10 @@ def consolidate(store: MemoryStore, lock=None, dry_run: bool = False, log=_log) 
     try:
         cur = store.get()
         tail = cur["learned"]["pending"][n_pending:]
+        cur["learned"]["pending"] = cur["learned"]["pending"][:n_pending]   # only what Claude saw
         problems = memmod.apply_consolidation(cur, rewrite)
+        if problems:
+            cur["learned"]["pending"].extend(tail)
         if problems:
             log("consolidation rejected: %s" % "; ".join(problems))
             return {"applied": False, "reason": "; ".join(problems), "diff": diff}
@@ -371,15 +417,17 @@ def consolidate(store: MemoryStore, lock=None, dry_run: bool = False, log=_log) 
 
 
 def _diff_summary(old: dict, new: dict) -> dict:
+    new_rules = [r for r in new.get("rules") or [] if isinstance(r, dict)] if isinstance(new.get("rules"), list) else []
+    new_cats = new.get("categories") if isinstance(new.get("categories"), dict) else {}
     old_ids = {r["id"] for r in old["rules"]}
-    new_ids = {r.get("id") for r in new.get("rules", [])}
+    new_ids = {r.get("id") for r in new_rules if isinstance(r.get("id"), str)}
     return {
         "rules_added": sorted(i for i in new_ids - old_ids if i),
         "rules_removed": sorted(old_ids - new_ids),
-        "rules_changed": sorted(r.get("id") for r in new.get("rules", []) if r.get("id") in old_ids and
-                                r != next(o for o in old["rules"] if o["id"] == r.get("id"))),
-        "categories_added": sorted(set(new.get("categories", {})) - set(old["categories"])),
-        "categories_removed": sorted(set(old["categories"]) - set(new.get("categories", {}))),
+        "rules_changed": sorted(r["id"] for r in new_rules if isinstance(r.get("id"), str) and r["id"] in old_ids
+                                and r != next(o for o in old["rules"] if o["id"] == r["id"])),
+        "categories_added": sorted(set(new_cats) - set(old["categories"])),
+        "categories_removed": sorted(set(old["categories"]) - set(new_cats)),
         "targets": new.get("targets", {}),
         "claude_notes_len": len(str(new.get("claude_notes", ""))),
     }

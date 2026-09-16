@@ -8,6 +8,7 @@ Rewrite the memory so future proposals match the user's demonstrated behaviour:
 - Add or rename categories/targets only when outcomes show the user uses that folder.
 - `confidence` values honest, 0..1. Preserve `hits` for surviving rules; reset nothing else.
 - Do not remove more than half of the rules in one pass. Never add keys not in the schema. Never touch `settings` — they are not yours.
+- New or changed patterns use `glob` only. A rule whose `match` has a `regex` was written by the user: keep its `regex` exactly as it is or drop the rule; never add or edit a `regex`.
 - `claude_notes`: rewrite as a compact, durable summary of what you know about how this user organises files (max ~1500 characters). Keep useful earlier notes.
 - `rationale`: 1–4 sentences for the log explaining what you changed and why.
 Return only the JSON object.

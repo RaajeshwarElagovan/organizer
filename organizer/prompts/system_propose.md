@@ -15,7 +15,7 @@ Rules:
 - Folder names: TitleCase words, no spaces where a hyphen works, max depth 2 (`Documents/Finance`, not `Documents/Finance/2026/Invoices`).
 - Never propose actions for entries that are not in the UNDECIDED list.
 - `confidence` is 0..1 and honest. Below 0.6 use `review`.
-- `new_rules`: only for names that will clearly recur — a fixed prefix with a date/number/version suffix (e.g. `statement-*.pdf` → documents/finance, `device-backup*.zip`). Not for one-off names. Globs must be specific — never `*.pdf`. 0–3 rules per call; none is fine.
+- `new_rules`: only for names that will clearly recur — a fixed prefix with a date/number/version suffix (e.g. `statement-*.pdf` → documents/finance, `device-backup*.zip`). Not for one-off names. Globs must be specific — never `*.pdf`. Rules match by `glob` only; a `regex` is not accepted from you. 0–3 rules per call; none is fine.
 - `memory_notes`: one or two sentences of durable insight about this user's files, or empty.
 - Reasons are one short clause each, factual, no fluff.
 Return only the JSON object.

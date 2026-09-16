@@ -1,8 +1,11 @@
 """organizerd — Unix-socket daemon that owns memory/state and serves scan requests."""
+import errno
 import json
 import os
 import signal
+import socket
 import socketserver
+import stat
 import sys
 import threading
 import time
@@ -100,9 +103,37 @@ class Server(socketserver.ThreadingUnixStreamServer):
     allow_reuse_address = True
 
 
+def claim_socket(sock: str) -> None:
+    """Remove a stale socket file left by a crashed daemon; refuse to start if another
+    daemon still answers on it (otherwise two daemons would fight over state.json and
+    the first one's shutdown would unlink the second one's socket)."""
+    try:
+        st = os.lstat(sock)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISSOCK(st.st_mode):
+        raise SystemExit("[organizerd] %s exists and is not a socket; remove it or set ORGANIZER_SOCKET" % sock)
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    probe.settimeout(2)
+    try:
+        probe.connect(sock)
+    except OSError as e:
+        if e.errno != errno.ECONNREFUSED:
+            raise SystemExit("[organizerd] cannot probe %s: %s" % (sock, e))
+    else:
+        raise SystemExit("[organizerd] another organizerd is already listening on %s" % sock)
+    finally:
+        probe.close()
+    log("removing stale socket %s" % sock)
+    os.remove(sock)
+
+
 def main():
     global STORE, STATE
-    paths.ensure_dirs()
+    try:
+        paths.ensure_dirs()
+    except (OSError, RuntimeError) as e:
+        raise SystemExit("[organizerd] cannot set up directories: %s" % e)
     brain.start_runner()          # unrestricted helper thread for the claude CLI
     if sandbox.restrict():        # this thread + everything it spawns: read-only outside own dirs
         st = sandbox.status()
@@ -114,10 +145,14 @@ def main():
         log("WARNING: %s" % STORE.last_error)
     STATE = engine.load_state()
     sock = paths.socket_path()
-    if os.path.exists(sock):
-        os.remove(sock)
-    server = Server(sock, Handler)
+    claim_socket(sock)
+    old_umask = os.umask(0o077)   # 0600 from the moment the socket file exists
+    try:
+        server = Server(sock, Handler)
+    finally:
+        os.umask(old_umask)
     os.chmod(sock, 0o600)
+    own_ino = os.stat(sock).st_ino
     log("listening on %s (memory %s, %d rules)" % (sock, STORE.path, len(STORE.get()["rules"])))
 
     def stop(signum, frame):
@@ -130,7 +165,8 @@ def main():
     finally:
         server.server_close()
         try:
-            os.remove(sock)
+            if os.lstat(sock).st_ino == own_ino:   # not a socket a newer daemon bound meanwhile
+                os.remove(sock)
         except OSError:
             pass
 

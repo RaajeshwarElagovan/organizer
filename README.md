@@ -8,8 +8,8 @@ folder and move into it, move elsewhere, archive, delete, keep, or review.
 It **never modifies your files**. At startup the daemon (and the in-process
 CLI) puts itself in a [Landlock](https://docs.kernel.org/userspace-api/landlock.html)
 sandbox: it can read everything but can only create, change or delete files
-under `~/.config/organizer`, `~/.local/share/organizer`, the socket dir and
-`/tmp`. That promise is enforced by the kernel, not just by the code
+under `~/.config/organizer`, `~/.local/share/organizer` and its own socket
+dir `$XDG_RUNTIME_DIR/organizer/`. That promise is enforced by the kernel, not just by the code
 (`organizer status` shows the active sandbox). Hand the JSON report to a Claude
 agent (or read it yourself) when you want the plan applied.
 
@@ -48,10 +48,18 @@ Two stages per scan:
 cd ~/Downloads && organizer
 ```
 
-The installer enables the `systemd --user` unit (`WantedBy=default.target`)
-and turns on `loginctl enable-linger`, so the daemon starts at boot and
-survives logouts. Check with `systemctl --user status organizer` and
-`loginctl show-user $USER -p Linger`.
+The installer writes only under `$HOME`: `~/.local/lib/organizer` (code),
+`~/.local/bin/organizer` (launcher), `~/.config/systemd/user/organizer.service`,
+`~/.config/organizer/memory.json` (seeded once, never overwritten) and
+`~/.local/share/organizer` (state, reports). It enables and (re)starts the
+`systemd --user` unit (`WantedBy=default.target`), so the daemon runs while
+you are logged in. Check with `systemctl --user status organizer`. Without a
+usable `systemd --user` the CLI simply runs in-process. If you also want the
+daemon up at boot before any login, opt in with `ORGANIZER_LINGER=1
+./install.sh` (runs `loginctl enable-linger`; undo with
+`loginctl disable-linger $USER`). `./uninstall.sh` removes the code, launcher
+and unit and keeps your memory and reports; `./uninstall.sh --purge` removes
+those too.
 
 Requires python3 (stdlib only) and, for the AI stage, the `claude` CLI logged
 in (Claude Code). Without it the tool still works; ambiguous entries show as

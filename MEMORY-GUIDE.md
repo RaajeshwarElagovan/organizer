@@ -1,6 +1,6 @@
 # organizer memory — editing guide
 
-File: `~/.config/organizer/memory.json`. The daemon hot-reloads it (mtime check before every request), keeps `memory.json.bak` on every write it makes itself, and refuses to load an invalid file (it keeps the last good copy and reports the error in `organizer status`). Validate after editing: `organizer memory validate`.
+File: `~/.config/organizer/memory.json`. The daemon hot-reloads it (mtime/size/inode check before every request), keeps `memory.json.bak` on every write it makes itself, and refuses to load an invalid file: it keeps the last good copy in memory (an empty default memory if it was invalid at startup), reports the error in `organizer status` and in every scan's `warnings`, and **never writes over the invalid file** — outcomes learned meanwhile stay in memory only and are dropped when the repaired file is reloaded. Fix the file (or `cp memory.json.bak memory.json`), then `organizer reload`. Validate after editing: `organizer memory validate`.
 
 This file is meant to be rewritten by a Claude agent (or by hand). Everything except `settings` is fair game.
 
@@ -43,7 +43,7 @@ This file is meant to be rewritten by a Claude agent (or by hand). Everything ex
 | key | meaning |
 |---|---|
 | `glob` | case-insensitive shell glob on the file name |
-| `regex` | Python regex, `re.search`, case-insensitive |
+| `regex` | Python regex, `re.search`, case-insensitive, ≤ 200 chars. A quantified group that ends in a quantifier (`(a+)+`, `(\w+\s?)*`, `(\.\d+)+`) is refused as a backtracking risk even when it happens to be safe — write `v\d+(\.\d+)?(\.\d+)?` instead of `v\d+(\.\d+)+`. Prefer `glob`. **User-only key:** rules Claude suggests (`new_rules`) and consolidation rewrites cannot add a regex or change an existing one — they are rejected in code; a rewrite may only keep your regex rule verbatim or drop it. |
 | `ext` | list of extensions without dot (`tar.gz` allowed) |
 | `mime_prefix` | e.g. `image/` |
 | `is_dir` | true/false |
@@ -63,7 +63,13 @@ Signals produced by the scanner: `screenshot`, `ai_image`, `drive_download`, `ba
 7. Anything under `ai_threshold` → Claude stage (one batched `claude -p` call). Without Claude → `review` with the tentative decision shown.
 
 ## How learning changes this file
-- Layer 1 (deterministic, every scan): compares the last proposal for that directory with what is there now. Records to `learned.pending`: `confirmed`, `moved_elsewhere:<path>`, `deleted`, `ignored`. Immediately bumps `hits`/`confidence` (+0.05 on confirm, −0.1 on contradiction, −0.05 on ignored; floor 0.5 for `source: claude`, 0.2 otherwise). It never invents rules.
+- Layer 1 (deterministic, every scan): compares the last proposal for that directory with what is there now. Records to `learned.pending`: `confirmed`, `moved_elsewhere:<path>`, `deleted`, `ignored`. Immediately bumps `hits`/`confidence` (+0.05 on confirm, −0.1 on contradiction, −0.05 on ignored; floor 0.5 for `source: claude`, 0.2 otherwise — a floor only stops the decline, it never raises a rule that is already below it). It never invents rules.
+  - `confirmed`: the file is at the proposed folder, or — for a `delete` proposal — is gone and was not found elsewhere. A file is "found" only if it has the name **and the byte size** the proposal recorded (a move keeps the size); a same-name file of another size anywhere makes the case *ambiguous* and nothing is recorded — this covers an unrelated same-name file at the destination, and a file edited after being moved. Two same-name files of the same size are indistinguishable with names and `stat()` alone; the worst that can happen then is one wrong `confirmed` (+0.05, `hits`+1) or `moved_elsewhere` (−0.1), never a new rule.
+  - `moved_elsewhere:<path>`: the file turned up in another folder (searched two levels under the scanned directory, plus configured `targets`). A `delete` proposal whose file was filed away instead counts here, not as confirmed.
+  - `deleted`: the file is gone and was not found. A rename, or a move deeper than the search looks, is indistinguishable from a delete and is recorded as one.
+  - `ignored`: the file is still there after `ignored_after_scans` further scans **and** `ignored_after_days` days since the proposal was first made. Recorded once per proposal; a changed proposal restarts both counters. Fewer scans, or the same number of scans within fewer days, records nothing.
+  - `keep` and `review` proposals (including undecided entries left as `review` because Claude was unavailable) are not tracked at all — nothing about them is learned, whatever the user does.
+  - Only the rule named by the proposal's `rule_id` is adjusted. Decisions from the category table, the redundancy heuristics or Claude carry no `rule_id`, so they are recorded but move no counter.
 - Layer 2 (Claude, when `pending >= learn_batch` or a rule reaches `learn_contradictions`, or `organizer learn`): rewrites `rules`, `categories`, `targets`, `claude_notes` from the evidence. Rejected if it drops more than half the rules or fails validation. Backup kept in `memory.json.bak`.
 
 ## Advice for an agent editing this file
@@ -75,6 +81,8 @@ Signals produced by the scanner: `screenshot`, `ai_image`, `drive_download`, `ba
 - Do not edit `learned.pending` while a consolidation is running (`organizer status` shows it).
 
 ## settings
+Types are validated on load: booleans must be `true`/`false`, `delete_policy`/`ai_model` strings, everything else a non-negative number (`ai_threshold` 0..1). `"learn_batch": "5"` makes the file invalid rather than crashing a scan.
+
 | key | default | meaning |
 |---|---|---|
 | `archive_after_days` | 180 | move → archive when older than this |

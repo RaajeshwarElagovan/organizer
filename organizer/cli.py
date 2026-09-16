@@ -10,7 +10,10 @@ from . import memory as memmod
 
 
 def _fallback_context():
-    paths.ensure_dirs()
+    try:
+        paths.ensure_dirs()
+    except (OSError, RuntimeError) as e:
+        sys.exit("organizer: cannot set up directories: %s" % e)
     brain.start_runner()
     if not sandbox.restrict():
         sys.stderr.write("organizer: no kernel sandbox (%s)\n" % sandbox.status()["error"])
@@ -84,13 +87,46 @@ def cmd_history(args):
             acts, "  [claude]" if h.get("ai_used") else "", h["path"]))
 
 
+def _local_status(args):
+    """What this process can tell without the daemon: memory file, claude, kernel support."""
+    info = {"daemon": None, "socket": paths.socket_path(), "memory_path": paths.MEMORY_PATH,
+            "claude_cli": brain.claude_path(), "sandbox": {"applied": False, "error": None}}
+    try:
+        mem = memmod.load(paths.MEMORY_PATH)
+        info.update(rules=len(mem["rules"]), categories=len(mem["categories"]),
+                    pending_outcomes=len(mem["learned"]["pending"]), ai_enabled=mem["settings"].get("ai_enabled"),
+                    ai_model=mem["settings"].get("ai_model"), memory_error=None)
+    except (OSError, ValueError) as e:
+        info.update(rules=0, categories=0, pending_outcomes=0, ai_enabled=None, ai_model=None, memory_error=str(e))
+    try:
+        info["sandbox"]["landlock_abi"] = sandbox.abi_version()
+    except OSError as e:
+        info["sandbox"]["error"] = "landlock unavailable: %s" % e
+    if args.json:
+        print(json.dumps(info, indent=1)); return
+    print("daemon: not used (--no-daemon); would connect to %s" % info["socket"])
+    print("memory: %s  (%d rules, %d categories)%s" % (
+        info["memory_path"], info["rules"], info["categories"],
+        ("  ! " + info["memory_error"]) if info["memory_error"] else ""))
+    print("learning: %d pending outcome(s)" % info["pending_outcomes"])
+    print("ai: %s  model %s  claude=%s" % ("enabled" if info["ai_enabled"] else "disabled", info["ai_model"],
+                                          info["claude_cli"] or "NOT FOUND"))
+    sb = info["sandbox"]
+    if sb.get("landlock_abi"):
+        print("sandbox: landlock ABI %s available — applied to every in-process run" % sb["landlock_abi"])
+    else:
+        print("sandbox: NONE (%s)" % sb["error"])
+
+
 def cmd_status(args):
+    if args.no_daemon:
+        _local_status(args); return
     try:
         resp = protocol.send_request({"cmd": "status"}, timeout=10)
     except protocol.DaemonUnavailable as e:
         print("daemon: not running (%s)" % e)
         print("memory: %s" % paths.MEMORY_PATH)
-        print("start with: systemctl --user start organizer   (or use --no-daemon)")
+        print("start with: systemctl --user start organizer   (or: organizer --no-daemon status)")
         sys.exit(1)
     if args.json:
         print(json.dumps(resp, indent=1)); return
@@ -191,7 +227,9 @@ def build_parser():
     ap = argparse.ArgumentParser(prog="organizer", parents=[common],
                                  description="Report-only file organizer: classifies the current directory by name, type "
                                              "and metadata and proposes a structure. Never modifies files.")
-    ap.set_defaults(no_daemon=False, json=False)
+    # No set_defaults(no_daemon=False, ...) here: the parent's actions are shared with
+    # every subparser, so a default set on them would be re-applied by the subparser
+    # and silently override a flag given *before* the subcommand. main() fills in False.
     ap.add_argument("--version", action="version", version="organizer " + __version__)
     sp = ap.add_subparsers(dest="cmd", parser_class=lambda **kw: argparse.ArgumentParser(parents=[common], **kw))
 
@@ -221,6 +259,8 @@ def main(argv=None):
         argv = ["scan"] + argv if not argv or argv[0] not in ("-h", "--help", "--version") else argv
     # allow global flags after the subcommand too
     args = ap.parse_args(argv)
+    args.no_daemon = getattr(args, "no_daemon", False)
+    args.json = getattr(args, "json", False)
     if not hasattr(args, "func"):
         ap.print_help(); return
     args.func(args)

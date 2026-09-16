@@ -2,7 +2,10 @@
 
 After restrict() the calling thread — and every thread/process it creates
 afterwards — can read anything but can only create/modify/delete files beneath
-the allowed paths (organizer's own config/data dirs, the socket dir, /tmp).
+the allowed paths: organizer's own config dir, data dir and socket dir — three
+directories nothing else uses. Not /tmp, not $XDG_RUNTIME_DIR itself (which
+also holds the document-portal and gvfs mounts), not /dev: organizer opens no
+device for writing and creates no temporary files outside its data dir.
 Landlock is per-thread, so a helper thread started *before* restrict() stays
 unrestricted; brain.py uses one to run the `claude` CLI, which needs to write
 its own state under ~/.claude. That process gets no tools, so it cannot touch
@@ -45,6 +48,10 @@ class _RulesetAttr(ctypes.Structure):
 
 
 class _PathBeneath(ctypes.Structure):
+    # struct landlock_path_beneath_attr is __attribute__((packed)): 12 bytes, no padding.
+    # _layout_ = "ms" names the layout _pack_ always implied; Python 3.14 warns without
+    # it (an error from 3.19) and older versions ignore the attribute.
+    _layout_ = "ms"
     _pack_ = 1
     _fields_ = [("allowed_access", ctypes.c_uint64), ("parent_fd", ctypes.c_int32)]
 
@@ -67,8 +74,15 @@ def abi_version():
 
 
 def default_allowed():
-    dirs = [paths.CONFIG_DIR, paths.DATA_DIR, os.path.dirname(paths.socket_path()), "/tmp", "/dev"]
-    return [d for d in dirs if d and os.path.isdir(d)]
+    """Exactly the directories organizer writes: config (memory.json + .bak/.tmp),
+    data (state.json, reports), and the dedicated socket dir (bind + unlink).
+    paths.ensure_dirs() creates them before restrict() is called."""
+    dirs = [paths.CONFIG_DIR, paths.DATA_DIR, os.path.dirname(paths.socket_path())]
+    out = []
+    for d in dirs:
+        if d and os.path.isdir(d) and d not in out:
+            out.append(d)
+    return out
 
 
 def restrict(allowed_dirs=None):

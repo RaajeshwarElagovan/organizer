@@ -7,8 +7,7 @@ import os
 import time
 
 from . import memory as memmod
-
-ARCHIVE_DIR = "_archive"
+from .memory import ARCHIVE_DIR
 
 
 def _target_for(mem: dict, category, action, explicit_target, facts):
