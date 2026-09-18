@@ -210,12 +210,13 @@ PYTHON=python3 bash .github/scripts/smoke.sh
 - Fill in the pull request template (summary, motivation, what you tested,
   docs touched, safety/security impact). Say explicitly if the change
   touches any ground rule, the prompts/schemas or the sandbox.
-- `main` is a protected branch: nothing lands on it except through a pull
-  request that has all four CI checks green, at least one approving review
-  from the maintainer, and every review conversation resolved. New commits
-  on a PR dismiss earlier approvals, so expect a re-review after changes.
-  Direct pushes, force pushes and branch deletion are disabled for everyone,
-  the maintainer included.
+- `main` is a protected branch (`.github/rulesets/`): nothing lands on it
+  except through a pull request with all four CI checks green and every
+  review conversation resolved, and a contributor's PR also needs an
+  approving review from the maintainer. New commits on a PR dismiss earlier
+  approvals, so expect a re-review after changes. Direct pushes, force
+  pushes and branch deletion are disabled for everyone, the maintainer
+  included.
 - Maintainers merge; contributors do not need write access. If a PR goes
   quiet, a polite ping after a week or two is welcome.
 
