@@ -211,7 +211,8 @@ jobs:
           dpkg -s organizer | grep -E '^(Version|Architecture|Status)'
           organizer --version
           test "$(readlink -f "$(command -v organizer)")" = /usr/bin/organizer
-          python3 -c 'import organizer, organizer.paths as p; assert organizer.__file__.startswith("/usr/lib/python3/dist-packages/"), organizer.__file__; assert p.SEED_MEMORY == "/usr/share/organizer/seed/memory.json", p.SEED_MEMORY'
+          # from outside the checkout, so the source tree cannot shadow the installed package
+          (cd "$RUNNER_TEMP" && python3 -c 'import organizer, organizer.paths as p; assert organizer.__file__.startswith("/usr/lib/python3/dist-packages/"), organizer.__file__; assert p.SEED_MEMORY == "/usr/share/organizer/seed/memory.json", p.SEED_MEMORY')
           test -f /usr/lib/systemd/user/organizer.service
           systemd-analyze --user verify /usr/lib/systemd/user/organizer.service || true
 
