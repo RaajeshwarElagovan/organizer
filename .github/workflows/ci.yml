@@ -223,10 +223,12 @@ jobs:
           cd "$RUNNER_TEMP" && mkdir -p fix/project.zip-extracted && touch "fix/report (1).pdf" fix/report.pdf fix/notes "fix/Screenshot from 2026-01-02.png"
           before="$(cd fix && find . -printf '%p %m %s %T@ %y\n' | LC_ALL=C sort)"
           test ! -e "$HOME/.config/organizer/memory.json"
-          organizer --no-daemon status
-          organizer --no-daemon status --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["memory_error"] is None and d["rules"] > 0 and d["claude_cli"] is None, d'
-          cmp "$HOME/.config/organizer/memory.json" /usr/share/organizer/seed/memory.json
+          organizer --no-daemon status      # read-only: reports the missing file, must not create it
+          test ! -e "$HOME/.config/organizer/memory.json"
+          # the first scan seeds memory.json from the packaged seed
           organizer --no-daemon fix --json 2>err.txt | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["report_only"] and d["summary"]["entries"] == 5 and d["ai"]["used"] is False, d'
+          cmp "$HOME/.config/organizer/memory.json" /usr/share/organizer/seed/memory.json
+          organizer --no-daemon status --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["memory_error"] is None and d["rules"] > 0 and d["claude_cli"] is None, d'
           ! grep -q "no kernel sandbox" err.txt || echo "::warning::no Landlock on this runner"
           # the packaged unit's exact command line, as a plain process (no user manager on the runner)
           mkdir -p "$RUNNER_TEMP/rt" && chmod 700 "$RUNNER_TEMP/rt"
