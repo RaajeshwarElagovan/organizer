@@ -11,7 +11,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, release-prep]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -255,7 +255,11 @@ jobs:
           test "$(digest "$HOME/.local/share/organizer")" = "$d"
           echo "user config/data preserved across reinstall, remove and purge"
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload .deb and source tarball
+        uses: actions/upload-artifact@v4
         with:
           name: dist
-          path: dist/
+          path: |
+            dist/organizer-*.tar.gz
+            dist/organizer_*_all.deb
+          if-no-files-found: error
