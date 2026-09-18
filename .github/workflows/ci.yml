@@ -232,11 +232,13 @@ jobs:
           ! grep -q "no kernel sandbox" err.txt || echo "::warning::no Landlock on this runner"
           # the packaged unit's exact command line, as a plain process (no user manager on the runner)
           mkdir -p "$RUNNER_TEMP/rt" && chmod 700 "$RUNNER_TEMP/rt"
-          ( cd "$HOME" && env XDG_RUNTIME_DIR="$RUNNER_TEMP/rt" PYTHONSAFEPATH=1 PYTHONUNBUFFERED=1 PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" /usr/bin/python3 -m organizer.daemon 2> "$RUNNER_TEMP/daemon.err" & echo $! > "$RUNNER_TEMP/dpid" )
+          # exec so $! is the daemon itself, not a wrapping subshell
+          ( cd "$HOME" && exec env XDG_RUNTIME_DIR="$RUNNER_TEMP/rt" PYTHONSAFEPATH=1 PYTHONUNBUFFERED=1 PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" /usr/bin/python3 -m organizer.daemon 2> "$RUNNER_TEMP/daemon.err" ) &
+          echo $! > "$RUNNER_TEMP/dpid"
           for _ in $(seq 1 100); do [ -S "$RUNNER_TEMP/rt/organizer/organizer.sock" ] && break; sleep 0.1; done
           test -S "$RUNNER_TEMP/rt/organizer/organizer.sock" || { cat "$RUNNER_TEMP/daemon.err"; exit 1; }
           XDG_RUNTIME_DIR="$RUNNER_TEMP/rt" organizer status
-          XDG_RUNTIME_DIR="$RUNNER_TEMP/rt" organizer status --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["pid"] == int(open(sys.argv[1]).read()); print("sandbox:", d["sandbox"])' "$RUNNER_TEMP/dpid"
+          XDG_RUNTIME_DIR="$RUNNER_TEMP/rt" organizer status --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["pid"] == int(sys.argv[1]), (d["pid"], sys.argv[1]); print("sandbox:", d["sandbox"])' "$(cat "$RUNNER_TEMP/dpid")"
           XDG_RUNTIME_DIR="$RUNNER_TEMP/rt" organizer fix --json 2>derr.txt | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["report_only"] and d["summary"]["entries"] == 5, d'
           ! grep -q "running in-process" derr.txt
           kill -TERM "$(cat "$RUNNER_TEMP/dpid")"; sleep 1
