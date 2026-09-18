@@ -1,7 +1,8 @@
 # Contributing
 
 Thanks for looking at `organizer`. It is a small project with a few hard
-rules; most of this document is about keeping those rules intact.
+rules; most of this document is about keeping those rules intact. Everyone
+taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Ground rules (non-negotiable)
 
@@ -160,19 +161,31 @@ the outcome shows up in `learned.pending` and adjusts the rule's
 
 ### Continuous integration
 
-`.github/workflows/ci.yml` runs on every push to `main`, every pull request
-and every `v*` tag, on the documented minimum Python (3.8), the Ubuntu 24.04
-system interpreter (3.12 — what `/usr/bin/python3`, the launcher and the
-unit actually run) and the newest stable CPython. Each job compiles every
-module, runs the full `unittest` suite with `-X dev -W error::ResourceWarning`
-and fails if any `ResourceWarning` is printed, then runs
-`.github/scripts/smoke.sh` — the fixture above, automated: `--no-daemon`
-scans with and without `--no-ai`, `explain`, `memory`, `history`, `status`,
-`learn --dry-run`, and a dev-daemon round trip, with a byte-for-byte check
-that the fixture is untouched. Everything runs under a throw-away `$HOME` /
-`XDG_*` / `XDG_RUNTIME_DIR` beneath `$RUNNER_TEMP`, with no `claude` on
-`PATH` and no `CLAUDE*` variables; the real home and the user manager are
-checked afterwards. To reproduce a job locally:
+`.github/workflows/ci.yml` runs on every push to `main` and `release-prep`,
+every pull request and every `v*` tag. It has four jobs, and all four must
+be green before a pull request is merged:
+
+- `py3.8 (minimum)`, `py3.12 (system)`, `py3.14 (newest)` — the documented
+  minimum Python, the Ubuntu 24.04 system interpreter (what `/usr/bin/python3`,
+  the launcher and the unit actually run) and the newest stable CPython.
+  Each compiles every module, runs the full `unittest` suite with
+  `-X dev -W error::ResourceWarning` and fails if any `ResourceWarning` is
+  printed, then runs `.github/scripts/smoke.sh` — the fixture above,
+  automated: `--no-daemon` scans with and without `--no-ai`, `explain`,
+  `memory`, `history`, `status`, `learn --dry-run`, and a dev-daemon round
+  trip, with a byte-for-byte check that the fixture is untouched.
+- `debian package` — builds `dist/` with `./build-dist.sh`, runs
+  `tests/test_packaging.py`, checks the tarball against `git ls-files`,
+  installs the `.deb` as root on the runner, exercises the packaged CLI and
+  daemon without Claude, then reinstalls, removes and purges it and checks
+  that the user's config/data survived. On `v*` tags its `dist` artifact is
+  what gets attached to the GitHub Release.
+
+Everything runs under a throw-away `$HOME` / `XDG_*` / `XDG_RUNTIME_DIR`
+beneath `$RUNNER_TEMP`, with no `claude` on `PATH` and no `CLAUDE*`
+variables; the real home and the user manager are checked afterwards. CI
+needs nothing private: no secrets, no self-hosted runners, no accounts —
+it runs the same way on a fork. To reproduce a test job locally:
 
 ```sh
 export HOME=/tmp/org-ci-home XDG_RUNTIME_DIR=/tmp/org-ci-home/run   # short: AF_UNIX paths are capped at 108 bytes
@@ -190,7 +203,22 @@ PYTHON=python3 bash .github/scripts/smoke.sh
 - Update docs in the same PR: README for commands/behaviour,
   `MEMORY-GUIDE.md` for schema, `ARCHITECTURE.md` for module/flow changes,
   `SECURITY.md`/`THREAT-MODEL.md` for anything crossing a trust boundary.
-- Branch from `main`; PRs target `main`.
+- Branch from `main`; PRs target `main`. Keep a PR to one focused change —
+  unrelated fixes go in separate PRs, which are quicker to review.
+- Behavioural changes come with tests in `tests/` (see *Testing* for which
+  file covers what); bug fixes should add the case that failed.
+- Fill in the pull request template (summary, motivation, what you tested,
+  docs touched, safety/security impact). Say explicitly if the change
+  touches any ground rule, the prompts/schemas or the sandbox.
+- `main` is a protected branch (`.github/rulesets/`): nothing lands on it
+  except through a pull request with all four CI checks green and every
+  review conversation resolved, and a contributor's PR also needs an
+  approving review from the maintainer. New commits on a PR dismiss earlier
+  approvals, so expect a re-review after changes. Direct pushes, force
+  pushes and branch deletion are disabled for everyone, the maintainer
+  included.
+- Maintainers merge; contributors do not need write access. If a PR goes
+  quiet, a polite ping after a week or two is welcome.
 
 ## Releasing
 
@@ -199,14 +227,19 @@ PYTHON=python3 bash .github/scripts/smoke.sh
    with today's date.
 3. Add a matching `X.Y.Z-1` entry at the top of `debian/changelog`
    (`dch -v X.Y.Z-1` or by hand; `build-dist.sh` refuses a mismatch).
-4. Commit as `release: vX.Y.Z`, tag `vX.Y.Z`.
+4. Commit as `release: vX.Y.Z`, land it on `main` through a PR, then tag
+   `vX.Y.Z` (annotated) and push only the tag.
 5. `./build-dist.sh` (needs `dpkg-dev debhelper dh-python fakeroot`, `lintian`
    optional) → `dist/organizer-X.Y.Z.tar.gz` (`git archive` of the tag,
    reproducible) and `dist/organizer_X.Y.Z-1_all.deb`. `dist/` is ignored by
-   git; never commit the artifacts.
+   git; never commit the artifacts. The tag push runs the same build in CI;
+   its `dist` artifact must be byte-identical to your local build.
 6. `./install.sh` on a clean machine and `sudo dpkg -i` the package on
    another (or a VM); run the fixture above with each, then `dpkg -r` and
    check `~/.config/organizer` and `~/.local/share/organizer` are still there.
+7. Create the GitHub Release for the tag from the CI `dist` artifact: attach
+   the `.deb`, the tarball and a `SHA256SUMS` file, and use the
+   `CHANGELOG.md` section as the notes.
 
 ## Security issues
 

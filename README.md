@@ -186,11 +186,14 @@ next `organizer` run notices what moved and learns from it.
   run with no tools, so the model cannot touch files — see `SECURITY.md`.
 - Linux only.
 
-## Security and licence
+## Security, contributing and licence
 
 Security model and residual risks: [SECURITY.md](SECURITY.md) and
 [THREAT-MODEL.md](THREAT-MODEL.md); please report vulnerabilities as
-described there rather than in a public issue. Licence: MIT ([LICENSE](LICENSE)).
+described there rather than in a public issue. Bug reports and pull requests
+are welcome — [CONTRIBUTING.md](CONTRIBUTING.md) has the ground rules,
+development setup and test commands; the [Code of Conduct](CODE_OF_CONDUCT.md)
+applies. Licence: MIT ([LICENSE](LICENSE)).
 
 ## Layout
 
